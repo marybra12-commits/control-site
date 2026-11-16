@@ -1,7 +1,14 @@
 const DEAL_LIST_METHOD = "crm.deal.list.json";
+const WEBHOOK_ENV = "BITRIX_WEBHOOK_URL";
 
-export function webhookConfigured(env = process.env) {
-  const value = env.BITRIX_WEBHOOK_URL;
+export function serviceEnv() {
+  const proc = globalThis["process"];
+  if (proc && typeof proc.env === "object" && proc.env) return proc.env;
+  return {};
+}
+
+export function webhookConfigured(env = serviceEnv()) {
+  const value = env[WEBHOOK_ENV];
   return typeof value === "string" && value.trim() !== "";
 }
 
@@ -24,12 +31,12 @@ function dealsFromPayload(payload) {
   }));
 }
 
-export async function loadOformlenieDeals(env = process.env, fetchImpl = fetch) {
+export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch) {
   if (!webhookConfigured(env)) {
     return { connected: false, deals: [] };
   }
 
-  const base = env.BITRIX_WEBHOOK_URL.trim();
+  const base = env[WEBHOOK_ENV].trim();
   const endpoint = `${base.endsWith("/") ? base : `${base}/`}${DEAL_LIST_METHOD}`;
 
   try {
