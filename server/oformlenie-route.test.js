@@ -45,7 +45,9 @@ test("root handler reads the runtime env and returns deal titles only", async ()
       const body = await response.json();
       assert.equal(called, true);
       assert.equal(body.connected, true);
-      assert.deepEqual(body.deals, [{ id: "3", title: "Карточка", stage: "NEW", assignee: "9" }]);
+      assert.equal(body.deals[0].title, "Карточка");
+      assert.equal(body.deals[0].assignee, "Нет данных");
+      assert.equal(body.deals[0].checks.every((check) => check.status === "Нет данных"), true);
       assert.equal(JSON.stringify(body).includes("http"), false);
     });
   } finally {

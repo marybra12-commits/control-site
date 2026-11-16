@@ -231,6 +231,51 @@ dd {
   font-weight: 500;
 }
 
+.deal-open {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.deal-open-label {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.deal-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+.back {
+  margin: 0 0 16px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.back:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
 .deal-meta {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -251,6 +296,64 @@ dd {
 .deal-meta dd {
   margin: 4px 0 0;
   font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.deal-link {
+  color: var(--accent);
+}
+
+.pill-done {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.reviews-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.reviews-scroll {
+  overflow-x: auto;
+}
+
+.reviews {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: "Montserrat", sans-serif;
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.reviews th,
+.reviews td {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.reviews td.reviews-facts {
+  white-space: normal;
+  min-width: 240px;
+}
+
+.reviews-note {
+  margin: 0;
+  padding: 14px 16px 16px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.reviews th {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.reviews tr:last-child td {
+  border-bottom: 0;
 }
 
 @media (max-width: 800px) {
