@@ -34,7 +34,7 @@ export default function App() {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch("/api/oformlenie", { signal: controller.signal })
+    fetch("/api/oformlenie", { signal: controller.signal, cache: "no-store" })
       .then((response) => response.json())
       .then((body) => {
         setBitrix({
