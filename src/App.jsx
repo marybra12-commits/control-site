@@ -119,6 +119,18 @@ function ReviewsTable({ deals }) {
   );
 }
 
+function Mark({ closed }) {
+  return (
+    <span className={closed ? "mark mark-done" : "mark"} aria-label={closed ? "Закрыт" : "Открыт"}>
+      {closed ? (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M3.2 8.2 6.4 11.3 12.8 4.7" />
+        </svg>
+      ) : null}
+    </span>
+  );
+}
+
 function stageProblem(deal) {
   const fit = deal.stageFit;
   if (!fit || fit.state === "right") return "";
@@ -139,6 +151,12 @@ function DealDetail({ section, deal, onBack }) {
   const stageNote = deal.pilot ? stageProblem(deal) : "";
   const behind = rows.filter((check) => check.behind);
   const checklistItems = Array.isArray(deal.checklist) ? deal.checklist : null;
+  const report = Array.isArray(deal.report) ? deal.report : null;
+  const talk = [
+    ["Тон клиента", deal.dialog?.clientTone],
+    ["Как отвечает", deal.dialog?.replies],
+    ["Тон менеджера", deal.dialog?.managerTone],
+  ].filter(([, value]) => value && value !== noData);
 
   return (
     <article className="card deal">
@@ -172,35 +190,124 @@ function DealDetail({ section, deal, onBack }) {
           </div>
         ) : null}
       </dl>
-      {deal.pilot ? (
-        <section className="bitrix-work" aria-label="Назначение в Битриксе">
-          <h3>Как назначены люди в Битриксе</h3>
-          <p>Сделку ведёт ответственная: {deal.assignee || noData}. Пункт чек-листа ведёт человек в этом пункте. Если человек в пункте не указан, на карточке остаётся «Нет данных».</p>
-          {deal.stageFit?.state === "right" ? (
-            <p>Стадия «{deal.stageFit.stage}» для этого срока подходит. Ориентир: «{deal.stageFit.expected}».</p>
-          ) : null}
-          {stageNote ? <p>{stageNote}</p> : null}
-          <h3>Чек-лист Битрикса</h3>
-          {checklistItems === null ? <p>{noData}</p> : null}
-          {checklistItems && checklistItems.length === 0 ? <p>Чек-листов в Битриксе нет.</p> : null}
-          {checklistItems && checklistItems.length > 0 ? (
-            <ul className="bitrix-checks">
-              {checklistItems.map((item) => (
-                <li key={`${item.title}-${item.state}`}>
-                  <span>{item.title || "Пункт"}</span>
-                  <span>{item.state === "closed" ? "Закрыт" : "Открыт"}</span>
-                  <span>{item.assignee || noData}</span>
-                </li>
-              ))}
-            </ul>
-          ) : null}
+      {report ? (
+        <div className="table-scroll">
+          <table className="work-table">
+            <caption>Что страдает по регламенту. Сверка каждый час: сделка, Карты и переписка.</caption>
+            <thead>
+              <tr>
+                <th>Где застряло</th>
+                <th>Сделано</th>
+                <th>Чего нет</th>
+                <th>Что сказать менеджеру</th>
+                <th>Почему отстали</th>
+              </tr>
+            </thead>
+            <tbody>
+              {report.map((item) => {
+                const key = `report:${item.title}`;
+                const opened = openProof === key;
+                const proven = item.status === "Сделано" && item.proof;
+                return (
+                  <tr key={item.title}>
+                    <td>{item.stuck || noData}</td>
+                    <td className="done-cell">
+                      {item.state ? <Mark closed={item.state === "closed"} /> : null}
+                      {proven ? (
+                        <button
+                          type="button"
+                          className="done-button"
+                          aria-expanded={opened}
+                          onClick={() => setOpenProof(opened ? "" : key)}
+                        >
+                          Сделано
+                        </button>
+                      ) : null}
+                      {opened ? <p className="proof-line">{item.proof}</p> : null}
+                    </td>
+                    <td>{item.missing || noData}</td>
+                    <td>{item.say || noData}</td>
+                    <td>{item.why || noData}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+      {stageNote && report ? <p className="stage-line">{stageNote}</p> : null}
+      {report && talk.length > 0 ? (
+        <section className="panel" aria-label="Переписка">
           <h3>Переписка</h3>
-          <p>Тон клиента: {deal.dialog?.clientTone || noData}</p>
-          <p>Как отвечает: {deal.dialog?.replies || noData}</p>
-          <p>Тон менеджера: {deal.dialog?.managerTone || noData}</p>
+          <dl className="panel-rows">
+            {talk.map(([label, value]) => (
+              <div key={label}>
+                <dt>{label}</dt>
+                <dd>{value}</dd>
+              </div>
+            ))}
+          </dl>
         </section>
       ) : null}
-      {behind.length > 0 || stageNote ? (
+      {deal.pilot && !report ? (
+        <>
+          <section className="panel" aria-label="Статус">
+            <h3>Статус</h3>
+            <dl className="panel-rows">
+              <div>
+                <dt>Ответственная</dt>
+                <dd>{deal.assignee || noData}</dd>
+              </div>
+              <div>
+                <dt>Стадия</dt>
+                <dd>{deal.stage || noData}</dd>
+              </div>
+              <div>
+                <dt>Для срока</dt>
+                <dd>
+                  {deal.stageFit?.state === "right"
+                    ? `Подходит. Ориентир: «${deal.stageFit.expected}».`
+                    : stageNote || noData}
+                </dd>
+              </div>
+            </dl>
+          </section>
+          <section className="panel" aria-label="Чек-лист">
+            <h3>Чек-лист</h3>
+            {checklistItems === null ? <p className="panel-empty">{noData}</p> : null}
+            {checklistItems && checklistItems.length === 0 ? <p className="panel-empty">Чек-листов в Битриксе нет.</p> : null}
+            {checklistItems && checklistItems.length > 0 ? (
+              <ul className="bitrix-checks">
+                {checklistItems.map((item) => (
+                  <li key={`${item.title}-${item.state}`}>
+                    <Mark closed={item.state === "closed"} />
+                    <span className="check-title">{item.title || "Пункт"}</span>
+                    <span className="row-person">{item.assignee || noData}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </section>
+          <section className="panel" aria-label="Переписка">
+            <h3>Переписка</h3>
+            <dl className="panel-rows">
+              <div>
+                <dt>Тон клиента</dt>
+                <dd>{deal.dialog?.clientTone || noData}</dd>
+              </div>
+              <div>
+                <dt>Как отвечает</dt>
+                <dd>{deal.dialog?.replies || noData}</dd>
+              </div>
+              <div>
+                <dt>Тон менеджера</dt>
+                <dd>{deal.dialog?.managerTone || noData}</dd>
+              </div>
+            </dl>
+          </section>
+        </>
+      ) : null}
+      {!report && (behind.length > 0 || stageNote) ? (
         <section className="behind" aria-label="Где клиент отстаёт">
           <h3>Где клиент отстаёт</h3>
           <ul>
@@ -211,44 +318,7 @@ function DealDetail({ section, deal, onBack }) {
           </ul>
         </section>
       ) : null}
-      {Array.isArray(deal.report) ? (
-        <section className="bitrix-work" aria-label="Отчёт по чек-листу">
-          <h3>Отчёт по чек-листу «Настроить профиль по сделке»</h3>
-          <ul className="checks report-checks">
-            {deal.report.map((item) => {
-              const key = `report:${item.title}`;
-              const opened = openProof === key;
-              return (
-                <li key={item.title} className="check check-report">
-                  <span className="check-title">
-                    {item.title}
-                    {item.state === "open" ? <span className="late-tag">Пункт открыт</span> : null}
-                    {item.state === "closed" ? <span className="check-proof">Пункт закрыт</span> : null}
-                  </span>
-                  {item.status === "Сделано" ? (
-                    <button
-                      type="button"
-                      className="done-button"
-                      aria-expanded={opened}
-                      onClick={() => setOpenProof(opened ? "" : key)}
-                    >
-                      Сделано
-                    </button>
-                  ) : (
-                    <span className={item.status === "Не сделано" ? "pill pill-open" : "pill"}>{item.status || noData}</span>
-                  )}
-                  {opened ? (
-                    <div className="proof-panel">
-                      <p>{item.proof || noData}</p>
-                    </div>
-                  ) : null}
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      ) : null}
-      {rows.length > 0 ? (
+      {!report && rows.length > 0 ? (
         <ul className="checks">
           {rows.map((check) => {
             const opened = openProof === check.code;
@@ -283,14 +353,9 @@ function DealDetail({ section, deal, onBack }) {
           })}
         </ul>
       ) : null}
-      {deal.finishBy ? <p className="rule">Оформление сдать в течение месяца от старта, до {deal.finishBy}.</p> : null}
-      {deal.brief ? <p className="rule">Бриф: {deal.brief}</p> : null}
-      <p className="rule">Чеклист обновляется каждый час. Зелёная кнопка «Сделано» открывает текст или снимок. Без следа шаг остаётся «Нет данных».</p>
-      <p className="rule">
-        {Array.isArray(deal.report)
-          ? "Незакрытый пункт этого чек-листа — «Не сделано». Если пункта в Битриксе нет — «Нет данных»."
-          : "Нет следа в Битриксе — «Нет данных», не «Не сделано»."}
-      </p>
+      {deal.finishBy && deal.finishBy !== noData ? <p className="rule">Сдать до {deal.finishBy}.</p> : null}
+      {deal.brief && deal.brief !== noData ? <p className="rule">Бриф: {deal.brief}</p> : null}
+      {report ? null : <p className="rule">Нет следа в Битриксе — «Нет данных». Кнопка «Сделано» есть только там, где след есть.</p>}
     </article>
   );
 }
@@ -302,6 +367,9 @@ function DealCards({ deals, onOpen }) {
         <article className="card deal" key={dealKey(deal, index)}>
           <button type="button" className="deal-open" onClick={() => onOpen(dealKey(deal, index))}>
             <span className="deal-title">{deal.title || "Без названия"}</span>
+            {Array.isArray(deal.report) ? (
+              <span className="suffering">Страдает: {deal.report.filter((item) => item.stuck && item.stuck !== "Нет" && item.stuck !== noData).length}</span>
+            ) : null}
             <span className="deal-open-label">Открыть</span>
           </button>
           <dl className="deal-meta">

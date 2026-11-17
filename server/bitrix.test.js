@@ -62,6 +62,16 @@ test("each funnel keeps its active deals and drops a won card", async () => {
     { BITRIX_WEBHOOK_URL: "https://example.invalid/rest/1/placeholder" },
     async (url, options) => {
       calls.push({ url, options });
+      if (String(url).startsWith("https://yandex.ru/maps/")) {
+        const html = `<script type="application/ld+json">{"@type":"LocalBusiness","name":"Раковый двор","address":{"streetAddress":"Набережная, 4"},"geo":{"latitude":1,"longitude":2},"image":["https://yandex.ru/cover.jpg","https://yandex.ru/logo.jpg"],"url":"https://example.invalid/site"}</script>"photos":{"count":3}"photoSections":[]"goods":{"count":0}"posts":{"count":1}"stories":{"count":0}"reviews":{"count":2}"reviewAnswers":{"count":0}"entrances":[]`;
+        return {
+          ok: true,
+          url,
+          async text() {
+            return html;
+          },
+        };
+      }
       const method = String(url).split("/").pop();
       const body = JSON.parse(options.body || "{}");
       const payloads = {
@@ -215,7 +225,23 @@ test("each funnel keeps its active deals and drops a won card", async () => {
         resultRows = { CHAT_ID: "77", CONNECTOR_ID: "whatsapp" };
       }
       if (method === "imopenlines.crm.chat.get.json" && String(body.CRM_ENTITY) === "31") {
-        resultRows = { CHAT_ID: "88", CONNECTOR_ID: "wazzup_whatsapp", OPERATOR_ID: "8" };
+        resultRows = [];
+      }
+      if (method === "crm.activity.list.json" && String(body.filter?.OWNER_ID) === "31") {
+        resultRows = [{
+          ID: "9",
+          ASSOCIATED_ENTITY_ID: "88",
+          PROVIDER_PARAMS: { CHAT_ID: "88", CONNECTOR_ID: "wazzup_whatsapp", OPERATOR_ID: "8" },
+        }];
+      }
+      if (method === "imopenlines.session.history.get.json" && String(body.SESSION_ID) === "88") {
+        resultRows = {
+          message: {
+            1: { senderid: "8", text: "Здравствуйте, я менеджер по оформлению", date: "2026-11-10T11:00:00+03:00" },
+            2: { senderid: "0", text: "Спасибо, добрый день", date: "2026-11-10T15:00:00+03:00" },
+            3: { senderid: "0", text: "Пожалуйста, жду макет", date: "2026-11-12T12:00:00+03:00" },
+          },
+        };
       }
       if (method === "im.dialog.messages.get.json") {
         resultRows = String(body.DIALOG_ID) === "chat88"
@@ -259,6 +285,8 @@ test("each funnel keeps its active deals and drops a won card", async () => {
     "STAGE_ID",
     "STAGE_SEMANTIC_ID",
     "ASSIGNED_BY_ID",
+    "CONTACT_ID",
+    "COMPANY_ID",
     "DATE_CREATE",
     "BEGINDATE",
     "CLOSEDATE",
@@ -347,10 +375,15 @@ test("each funnel keeps its active deals and drops a won card", async () => {
   assert.equal(packed.includes("Договор"), false);
   assert.equal(packed.includes("Магазин электрики"), false);
   assert.equal(JSON.stringify(ostrovok).includes("Не сделано"), false);
-  assert.equal(rakovy.report.find((item) => item.title === "Геолокация и вход").status, "Не сделано");
-  assert.equal(rakovy.report.find((item) => item.title === "Шапка профиля").status, "Сделано");
-  assert.equal(rakovy.report.find((item) => item.status === "Сделано").proof.includes("Настроить профиль"), true);
-  assert.equal(rakovy.report.find((item) => item.title === "SEO фото").status, "Нет данных");
+  const place = rakovy.report.find((item) => item.proof && item.proof.includes("адрес"));
+  assert.equal(place.stuck, "Нет");
+  assert.equal(place.status, "Сделано");
+  assert.equal(place.proof.includes("чек-лист"), false);
+  const goods = rakovy.report.find((item) => item.title === "Товары в витрине");
+  assert.equal(goods.stuck, "Товары в витрине");
+  assert.equal(goods.missing, "На Картах нет товаров в витрине.");
+  assert.equal(goods.status, undefined);
+  assert.equal(rakovy.report.find((item) => item.title === "QR-код").stuck, "Нет данных");
   assert.equal(rakovy.report.length, 11);
   assert.equal(packed.includes("заполните бриф"), false);
   assert.equal(packed.includes("жду макет"), false);
@@ -370,6 +403,16 @@ test("dialog labels do not repeat the chat", () => {
   assert.equal(read.managerTone, "спокойный");
   assert.equal(read.replies, "ответы реже раза в неделю");
   assert.equal(JSON.stringify(read).includes("Спасибо"), false);
+  const wazzup = readDialog(
+    [
+      { senderid: "0", text: "Когда будет макет", date: "2026-11-10T15:00:00+03:00" },
+      { senderid: "0", text: "Жду", date: "2026-11-11T12:00:00+03:00" },
+    ],
+    new Set(["8"]),
+  );
+  assert.equal(wazzup.clientTone, "нейтральный");
+  assert.equal(wazzup.replies, "отвечает в пределах трёх дней");
+  assert.equal(wazzup.managerTone, "Нет данных");
 });
 
 test("a failed read does not surface the endpoint", async () => {

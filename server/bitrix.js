@@ -478,17 +478,36 @@ function daysAfter(created, now) {
 }
 
 function messageText(row) {
-  return [row?.text, row?.message, row?.MESSAGE].map((item) => field(item).toLowerCase().replaceAll("ё", "е")).join(" ");
+  return [row?.text, row?.message, row?.MESSAGE, row?.params?.MESSAGE, row?.PARAMS?.MESSAGE]
+    .map((item) => field(item).toLowerCase().replaceAll("ё", "е"))
+    .join(" ");
 }
 
 function messageDate(row) {
-  return field(row?.date || row?.DATE || row?.DATE_CREATE);
+  return field(row?.date || row?.DATE || row?.DATE_CREATE || row?.dateCreate);
+}
+
+function messageAuthor(row) {
+  return field(row?.author_id ?? row?.authorId ?? row?.AUTHOR_ID ?? row?.senderid ?? row?.senderId ?? row?.SENDER_ID);
+}
+
+function chatRows(result) {
+  if (Array.isArray(result)) return result;
+  if (result && typeof result === "object") return [result];
+  return [];
 }
 
 function chatIdFrom(result) {
-  const rows = Array.isArray(result) ? result : result && typeof result === "object" ? [result] : [];
-  for (const row of rows) {
-    const id = field(row?.CHAT_ID || row?.chatId);
+  for (const row of chatRows(result)) {
+    const id = field(row?.CHAT_ID || row?.chatId || row?.chat_id);
+    if (id) return id;
+  }
+  return "";
+}
+
+function sessionIdFrom(result) {
+  for (const row of chatRows(result)) {
+    const id = field(row?.SESSION_ID || row?.sessionId || row?.ASSOCIATED_ENTITY_ID);
     if (id) return id;
   }
   return "";
@@ -509,6 +528,8 @@ function messageList(result) {
   if (Array.isArray(result)) return result;
   if (Array.isArray(result?.messages)) return result.messages;
   if (Array.isArray(result?.MESSAGES)) return result.MESSAGES;
+  const map = result?.message || result?.MESSAGE;
+  if (map && typeof map === "object" && !Array.isArray(map)) return Object.values(map);
   return [];
 }
 
@@ -628,17 +649,17 @@ function checklistAssignee(point, taskAssignee) {
 
 const PROFILE_GROUP = "настроить профиль по сделке";
 const PROFILE_ITEMS = [
-  "Геолокация и вход",
-  "Шапка профиля",
-  "Оформление (обложка, логотип, карточки товаров)",
-  "Фото по разделам",
-  "Внешние ссылки",
-  "Товары в витрину до 20 шт.",
-  "Новости 5 шт.",
-  "Ответы на отзывы",
-  "QR-код",
-  "Лента сторис",
-  "SEO фото",
+  ["Геолокация и вход", 6],
+  ["Шапка профиля", 6],
+  ["Оформление (обложка, логотип, карточки товаров)", 20],
+  ["Фото по разделам", 13],
+  ["Внешние ссылки", 6],
+  ["Товары в витрину до 20 шт.", 13],
+  ["Новости 5 шт.", 20],
+  ["Ответы на отзывы", 13],
+  ["QR-код", null],
+  ["Лента сторис", 20],
+  ["SEO фото", null],
 ];
 
 function looseTitle(value) {
@@ -656,7 +677,7 @@ export function profileReport(items) {
   const groupIds = new Set(rows.filter((item) => looseTitle(item?.title).includes(PROFILE_GROUP)).map((item) => field(item?.id)));
   const grouped = rows.filter((item) => groupIds.has(field(item?.parentId)));
   const pool = grouped.length ? grouped : rows.filter((item) => !looseTitle(item?.title).includes(PROFILE_GROUP));
-  return PROFILE_ITEMS.map((title) => {
+  return PROFILE_ITEMS.map(([title]) => {
     const found = pool.find((item) => titlesMatch(item?.title, title));
     if (!found) return { title, status: NO_DATA };
     if (found.state === "closed") {
@@ -674,6 +695,267 @@ export function profileReport(items) {
       status: NOT_DONE,
       assignee: found.assignee || NO_DATA,
     };
+  });
+}
+
+const CONTROL_POINTS = [
+  { key: "place", title: "Геолокация и вход", due: 6 },
+  { key: "head", title: "Шапка профиля", due: 6 },
+  { key: "design", title: "Оформление", due: 20 },
+  { key: "photos", title: "Фото по разделам", due: 13 },
+  { key: "links", title: "Внешние ссылки", due: 6 },
+  { key: "goods", title: "Товары в витрине", due: 13 },
+  { key: "news", title: "Новости", due: 20 },
+  { key: "reviews", title: "Ответы на отзывы", due: 13 },
+  { key: "qr", title: "QR-код", due: null },
+  { key: "stories", title: "Лента сторис", due: 20 },
+  { key: "seo", title: "SEO фото", due: null },
+];
+
+function countNear(html, key) {
+  const patterns = [
+    new RegExp(`"${key}"\\s*:\\s*\\{\\s*"count"\\s*:\\s*(\\d+)`, "i"),
+    new RegExp(`"${key}Count"\\s*:\\s*(\\d+)`, "i"),
+  ];
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    if (match) return Number(match[1]);
+  }
+  return null;
+}
+
+function jsonLdBlocks(html) {
+  const blocks = [];
+  const pattern = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  for (const match of html.matchAll(pattern)) {
+    try {
+      const parsed = JSON.parse(match[1]);
+      blocks.push(...(Array.isArray(parsed) ? parsed : [parsed]));
+    } catch {
+      // A broken block is not a profile fact.
+    }
+  }
+  return blocks;
+}
+
+export function parseMapsProfile(html) {
+  const source = typeof html === "string" ? html.slice(0, 400000) : "";
+  const blocks = jsonLdBlocks(source);
+  const business = blocks.find((block) => {
+    const type = field(block?.["@type"]).toLowerCase();
+    return type.includes("localbusiness") || type.includes("organization") || type.includes("place");
+  }) || {};
+  const address = business.address && typeof business.address === "object" ? business.address : {};
+  const images = [
+    ...(Array.isArray(business.image) ? business.image : business.image ? [business.image] : []),
+  ].map(field).filter(Boolean);
+  const site = field(business.url);
+  let external = 0;
+  if (site) {
+    try {
+      const host = new URL(site).hostname.toLowerCase();
+      if (!host.includes("yandex") && !host.endsWith("ya.ru")) external += 1;
+    } catch {
+      // Not a link.
+    }
+  }
+  const alts = [...source.matchAll(/<img\b[^>]*\balt=["']([^"']+)["']/gi)].length;
+  const readable = Boolean(field(business.name) || field(address.streetAddress) || images.length || countNear(source, "photos") !== null);
+  return {
+    readable,
+    name: Boolean(field(business.name)),
+    address: Boolean(field(address.streetAddress) || field(address.addressLocality)),
+    entrance: /"entrances"\s*:/.test(source) || source.toLowerCase().includes("\"вход\""),
+    coords: Boolean(business.geo) || /"coordinates"\s*:/.test(source),
+    images: images.length,
+    alts,
+    photos: countNear(source, "photos"),
+    photoSections: /"photoSections"\s*:\s*\[/.test(source) || /"rubrics"\s*:\s*\[/.test(source),
+    externalLinks: external || (/\"urls\"\s*:\s*\[\s*\"https?:/.test(source) ? 1 : 0),
+    goods: countNear(source, "goods"),
+    posts: countNear(source, "posts"),
+    stories: countNear(source, "stories"),
+    reviews: countNear(source, "reviews"),
+    reviewAnswers: countNear(source, "reviewAnswers"),
+  };
+}
+
+function allowedMapsUrl(value) {
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase();
+    const yandex = host === "ya.ru" || host.endsWith(".ya.ru") || host.includes("yandex.");
+    const path = url.pathname.toLowerCase();
+    return url.protocol === "https:" && yandex && (path.includes("/maps") || path.includes("/profile"));
+  } catch {
+    return false;
+  }
+}
+
+async function readMapsProfile(fetchImpl, link) {
+  if (!allowedMapsUrl(link)) return null;
+  try {
+    const response = await fetchImpl(link, {
+      method: "GET",
+      headers: { Accept: "text/html" },
+      signal: AbortSignal.timeout(12000),
+    });
+    if (!response?.ok || (response.url && !allowedMapsUrl(response.url))) return null;
+    const html = typeof response.text === "function" ? await response.text() : "";
+    const profile = parseMapsProfile(html);
+    return profile.readable ? profile : null;
+  } catch {
+    return null;
+  }
+}
+
+function factFor(profile, key) {
+  if (!profile) return { state: "unknown", missing: NO_DATA, proof: "" };
+  if (key === "place") {
+    if (profile.address && (profile.coords || profile.entrance)) return { state: "yes", missing: "Нет", proof: "На Картах есть адрес и вход." };
+    if (profile.address) return { state: "no", missing: "Адрес есть, вход не виден.", proof: "" };
+    return { state: "no", missing: "На Картах нет адреса.", proof: "" };
+  }
+  if (key === "head") {
+    if (profile.name) return { state: "yes", missing: "Нет", proof: "На Картах есть название." };
+    return { state: "no", missing: "На Картах нет названия в шапке.", proof: "" };
+  }
+  if (key === "design") {
+    if (profile.images > 1) return { state: "yes", missing: "Нет", proof: "На Картах есть обложка и картинки." };
+    if (profile.images === 1) return { state: "no", missing: "Есть одна картинка, обложка и логотип по отдельности не видны.", proof: "" };
+    return { state: "no", missing: "На Картах не видно обложки и логотипа.", proof: "" };
+  }
+  if (key === "photos") {
+    if (profile.photos > 0 && profile.photoSections) return { state: "yes", missing: "Нет", proof: "На Картах есть фото по разделам." };
+    if (profile.photos > 0) return { state: "no", missing: "Фото на Картах есть, разделы не видны.", proof: "" };
+    if (profile.photos === 0) return { state: "no", missing: "На Картах нет фото.", proof: "" };
+    return { state: "unknown", missing: NO_DATA, proof: "" };
+  }
+  if (key === "links") {
+    if (profile.externalLinks > 0) return { state: "yes", missing: "Нет", proof: "На Картах есть внешняя ссылка." };
+    return { state: "no", missing: "На Картах нет внешней ссылки.", proof: "" };
+  }
+  if (key === "goods") {
+    if (profile.goods >= 5 && profile.goods <= 20) return { state: "yes", missing: "Нет", proof: `На Картах ${profile.goods} товаров.` };
+    if (profile.goods === 0) return { state: "no", missing: "На Картах нет товаров в витрине.", proof: "" };
+    if (profile.goods > 0) return { state: "no", missing: `На Картах ${profile.goods} товаров, нужно от 5 до 20.`, proof: "" };
+    return { state: "unknown", missing: NO_DATA, proof: "" };
+  }
+  if (key === "news") {
+    if (profile.posts >= 5) return { state: "yes", missing: "Нет", proof: `На Картах ${profile.posts} новостей.` };
+    if (profile.posts === 0) return { state: "no", missing: "На Картах нет новостей.", proof: "" };
+    if (profile.posts > 0) return { state: "no", missing: `На Картах ${profile.posts} новостей, нужно 5.`, proof: "" };
+    return { state: "unknown", missing: NO_DATA, proof: "" };
+  }
+  if (key === "reviews") {
+    if (profile.reviews === 0) return { state: "yes", missing: "Нет", proof: "На Картах нет отзывов, отвечать не на что." };
+    if (profile.reviewAnswers !== null && profile.reviews !== null && profile.reviewAnswers >= profile.reviews) {
+      return { state: "yes", missing: "Нет", proof: "На отзывы на Картах есть ответы." };
+    }
+    if (profile.reviews > 0 && profile.reviewAnswers === 0) return { state: "no", missing: "На Картах есть отзывы без ответа.", proof: "" };
+    return { state: "unknown", missing: NO_DATA, proof: "" };
+  }
+  if (key === "stories") {
+    if (profile.stories > 0) return { state: "yes", missing: "Нет", proof: "На Картах есть сторис." };
+    if (profile.stories === 0) return { state: "no", missing: "На Картах нет сторис.", proof: "" };
+    return { state: "unknown", missing: NO_DATA, proof: "" };
+  }
+  if (key === "seo") {
+    if (profile.alts > 0) return { state: "yes", missing: "Нет", proof: "У фото на Картах есть подписи." };
+    if (profile.images > 0 && profile.alts === 0) return { state: "no", missing: "У фото на Картах нет подписей.", proof: "" };
+    return { state: "unknown", missing: NO_DATA, proof: "" };
+  }
+  return { state: "unknown", missing: NO_DATA, proof: "" };
+}
+
+function heardLine(heard, key) {
+  const said = heard && heard[key];
+  if (!said) return "";
+  return " В переписке это уже звучало, на Картах не видно.";
+}
+
+export function controlBrief({ maps, created, now, heard, replies }) {
+  const start = dayZeroKey(created);
+  const slow = typeof replies === "string" && (replies.includes("реже") || replies.includes("пауза"));
+  const rows = CONTROL_POINTS.map((point) => {
+    const fact = point.key === "qr"
+      ? { state: heard?.qr ? "unknown" : "unknown", missing: NO_DATA, proof: "" }
+      : factFor(maps, point.key);
+    const dueKey = start && typeof point.due === "number" ? addDays(start, point.due) : "";
+    const due = dueKey ? formatDay(dueKey) : "";
+    const late = Boolean(dueKey && now > atMoscowHour(dueKey, 18));
+    if (!maps && point.key !== "qr") {
+      return {
+        title: point.title,
+        stuck: NO_DATA,
+        missing: NO_DATA,
+        say: "В сделке нет ссылки на Карты, или страница не открылась.",
+        why: NO_DATA,
+      };
+    }
+    if (fact.state === "yes" && fact.proof) {
+      return {
+        title: point.title,
+        stuck: "Нет",
+        missing: "Нет",
+        status: DONE,
+        state: "closed",
+        proof: fact.proof,
+        say: "Ничего не говорить: на Картах это есть.",
+        why: "На Картах это видно.",
+      };
+    }
+    if (fact.state === "unknown") {
+      return {
+        title: point.title,
+        stuck: NO_DATA,
+        missing: NO_DATA,
+        say: point.key === "qr" ? "QR на Картах не виден. Смотреть только если его отправляли клиенту." : NO_DATA,
+        why: heard?.qr && point.key === "qr" ? "В переписке QR уже звучал." : NO_DATA,
+      };
+    }
+    const pause = slow ? " Клиент отвечает с паузами." : "";
+    const chat = heardLine(heard, point.key === "design" ? "cover" : point.key === "photos" ? "photo" : point.key === "news" ? "news" : point.key === "stories" ? "stories" : point.key === "links" ? "links" : point.key === "goods" ? "goods" : point.key === "reviews" ? "reviews" : point.key === "seo" ? "seo" : "");
+    return {
+      title: point.title,
+      stuck: point.title,
+      missing: fact.missing,
+      say: due
+        ? (late ? `Добавьте «${point.title}» на Карты. Срок был ${due}.` : `Добавьте «${point.title}» на Карты до ${due}.`)
+        : `Добавьте «${point.title}» на Карты.`,
+      why: `${late && due ? `Срок ${due} прошёл, на Картах этого нет.` : due ? "Срок ещё не вышел." : NO_DATA}${chat}${pause}`,
+    };
+  });
+  rows.sort((left, right) => Number(right.stuck !== "Нет" && right.stuck !== NO_DATA) - Number(left.stuck !== "Нет" && left.stuck !== NO_DATA));
+  return rows;
+}
+
+export function managerRows(items, created, now) {
+  const start = dayZeroKey(created);
+  return (Array.isArray(items) ? items : []).map((item) => {
+    const offset = PROFILE_ITEMS.find(([title]) => title === item.title)?.[1];
+    const dueKey = start && typeof offset === "number" ? addDays(start, offset) : "";
+    const due = dueKey ? formatDay(dueKey) : "";
+    const late = Boolean(dueKey && now > atMoscowHour(dueKey, 18) && item.state !== "closed");
+    if (item.status === NO_DATA) {
+      return {
+        ...item,
+        stuck: NO_DATA,
+        overdue: NO_DATA,
+        say: NO_DATA,
+        why: "В чек-листе Битрикса этого пункта нет.",
+      };
+    }
+    if (item.state === "closed" && item.proof) {
+      return { ...item, stuck: "Нет", overdue: "Нет", due, say: "Ничего не говорить: пункт закрыт.", why: "Пункт закрыт в чек-листе." };
+    }
+    if (typeof offset !== "number") {
+      return { ...item, stuck: "Да", overdue: NO_DATA, say: `Пункт «${item.title}» открыт. Срока в регламенте нет.`, why: NO_DATA };
+    }
+    if (late) {
+      return { ...item, stuck: "Да", overdue: due, due, say: `Закройте «${item.title}». Срок был ${due}.`, why: `Пункт открыт, срок ${due} прошёл.` };
+    }
+    return { ...item, stuck: "Да", overdue: "Нет", due, say: `Пункт «${item.title}» ещё открыт. Срок ${due}.`, why: "Срок ещё не вышел." };
   });
 }
 
@@ -731,7 +1013,7 @@ function toneLabel(texts) {
   const blob = texts.join(" ");
   if (RUDE.some((word) => blob.includes(word))) return "резкий";
   if (CALM.some((word) => blob.includes(word))) return "спокойный";
-  return NO_DATA;
+  return "нейтральный";
 }
 
 function dayGap(fromKey, toKey) {
@@ -754,20 +1036,21 @@ function replyPattern(dates) {
 }
 
 export function readDialog(messages, operatorIds) {
-  const empty = { clientTone: NO_DATA, replies: NO_DATA, managerTone: NO_DATA };
-  if (!operatorIds || operatorIds.size === 0) return empty;
+  const operators = operatorIds instanceof Set ? operatorIds : new Set();
   const clientDates = [];
   const clientTexts = [];
   const managerTexts = [];
-  for (const message of messages) {
-    const author = field(message?.author_id ?? message?.authorId ?? message?.AUTHOR_ID);
-    if (!author || author === "0") continue;
-    const text = messageText(message);
-    if (operatorIds.has(author)) {
-      if (text) managerTexts.push(text);
+  for (const message of Array.isArray(messages) ? messages : []) {
+    const author = messageAuthor(message);
+    const text = messageText(message).trim();
+    const system = field(message?.system ?? message?.SYSTEM).toUpperCase() === "Y";
+    if (system || !text || !author) continue;
+    const isManager = author !== "0" && (operators.size === 0 || operators.has(author));
+    if (isManager) {
+      managerTexts.push(text);
       continue;
     }
-    if (text) clientTexts.push(text);
+    clientTexts.push(text);
     const when = messageDate(message);
     if (when) clientDates.push(when);
   }
@@ -799,27 +1082,130 @@ function operatorIdsFrom(result, assigneeId) {
   return ids;
 }
 
-async function proofFromDialog(fetchImpl, base, dealId, now, assigneeId) {
+function activityRows(result) {
+  if (Array.isArray(result)) return result;
+  if (Array.isArray(result?.items)) return result.items;
+  return [];
+}
+
+function paramsOf(row) {
+  const params = row?.PROVIDER_PARAMS || row?.PROVIDER_DATA || row?.providerParams;
+  if (typeof params === "string") {
+    try {
+      const parsed = JSON.parse(params);
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return params && typeof params === "object" ? params : {};
+}
+
+async function findOpenLine(fetchImpl, base, dealId, row) {
+  const attempts = [
+    { CRM_ENTITY_TYPE: "deal", CRM_ENTITY: dealId },
+    { CRM_ENTITY_TYPE: "DEAL", CRM_ENTITY: dealId },
+  ];
+  const contact = field(row?.CONTACT_ID);
+  const company = field(row?.COMPANY_ID);
+  if (contact) attempts.push({ CRM_ENTITY_TYPE: "contact", CRM_ENTITY: contact });
+  if (company) attempts.push({ CRM_ENTITY_TYPE: "company", CRM_ENTITY: company });
+  for (const body of attempts) {
+    const chat = await postResult(fetchImpl, endpointFor(base, "imopenlines.crm.chat.get.json"), body);
+    if (chatIdFrom(chat.result) || sessionIdFrom(chat.result)) return chat.result;
+  }
+  const listed = await postResult(fetchImpl, endpointFor(base, "crm.activity.list.json"), {
+    filter: { OWNER_TYPE_ID: 2, OWNER_ID: dealId, PROVIDER_ID: "IMOPENLINES_SESSION" },
+    select: ["ID", "ASSOCIATED_ENTITY_ID", "PROVIDER_PARAMS", "PROVIDER_DATA"],
+    order: { ID: "DESC" },
+  });
+  for (const activity of activityRows(listed.result)) {
+    const params = paramsOf(activity);
+    const chatId = field(params.CHAT_ID || params.chatId);
+    const sessionId = field(activity?.ASSOCIATED_ENTITY_ID) || field(params.SESSION_ID);
+    if (!chatId && !sessionId) continue;
+    return {
+      CHAT_ID: chatId,
+      SESSION_ID: sessionId,
+      CONNECTOR_ID: field(params.CONNECTOR_ID || params.connectorId),
+      OPERATOR_ID: field(params.OPERATOR_ID || params.operatorId),
+    };
+  }
+  return null;
+}
+
+function heardFrom(messages) {
+  const blob = (Array.isArray(messages) ? messages : []).map((message) => messageText(message)).join(" ");
+  return {
+    cover: blob.includes("обложк") || blob.includes("логотип"),
+    stories: blob.includes("сторис"),
+    photo: blob.includes("фото"),
+    links: blob.includes("ссылк"),
+    goods: blob.includes("товар") || blob.includes("витрин"),
+    news: blob.includes("новост"),
+    reviews: blob.includes("отзыв"),
+    seo: blob.includes("seo"),
+    qr: blob.includes("qr") || blob.includes("кьюар"),
+  };
+}
+
+async function wazzupMessages(fetchImpl, base, dealId, assigneeId) {
+  const listed = await postResult(fetchImpl, endpointFor(base, "crm.activity.list.json"), {
+    filter: { OWNER_TYPE_ID: 2, OWNER_ID: dealId },
+    select: ["ID", "PROVIDER_ID", "SUBJECT", "DESCRIPTION", "DIRECTION", "CREATED"],
+    order: { ID: "DESC" },
+  });
+  const messages = [];
+  for (const activity of activityRows(listed.result).slice(0, 40)) {
+    const blob = [activity?.PROVIDER_ID, activity?.SUBJECT].map(field).join(" ").toLowerCase();
+    if (!blob.includes("wazzup")) continue;
+    const text = field(activity?.DESCRIPTION).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    if (!text || text.toLowerCase().includes("/rest/")) continue;
+    const outgoing = field(activity?.DIRECTION) === "2";
+    messages.push({
+      text,
+      author_id: outgoing ? (assigneeId || "1") : "0",
+      date: field(activity?.CREATED),
+    });
+  }
+  return messages;
+}
+
+async function lineMessages(fetchImpl, base, line) {
+  const sessionId = sessionIdFrom(line);
+  if (sessionId) {
+    const history = await postResult(fetchImpl, endpointFor(base, "imopenlines.session.history.get.json"), {
+      SESSION_ID: sessionId,
+      LIMIT: 50,
+    });
+    const messages = messageList(history.result);
+    if (messages.length) return messages;
+  }
+  const chatId = chatIdFrom(line);
+  if (!chatId) return [];
+  const history = await postResult(fetchImpl, endpointFor(base, "im.dialog.messages.get.json"), {
+    DIALOG_ID: `chat${chatId}`,
+    LIMIT: 50,
+  });
+  return messageList(history.result);
+}
+
+async function proofFromDialog(fetchImpl, base, dealId, now, assigneeId, row) {
   const notes = {
     brief: NO_DATA,
     marks: {},
     dialog: { clientTone: NO_DATA, replies: NO_DATA, managerTone: NO_DATA },
   };
   try {
-    const chat = await postResult(fetchImpl, endpointFor(base, "imopenlines.crm.chat.get.json"), {
-      CRM_ENTITY_TYPE: "DEAL",
-      CRM_ENTITY: dealId,
-    });
-    const channel = proven(channelProof(chat.result));
+    const line = await findOpenLine(fetchImpl, base, dealId, row);
+    const channel = proven(channelProof(line));
     if (channel) notes.marks["AM-D0-4"] = channel;
-    const chatId = chatIdFrom(chat.result);
-    if (!chatId) return notes;
-    const history = await postResult(fetchImpl, endpointFor(base, "im.dialog.messages.get.json"), {
-      DIALOG_ID: `chat${chatId}`,
-      LIMIT: 50,
-    });
-    const messages = messageList(history.result);
-    notes.dialog = readDialog(messages, operatorIdsFrom(chat.result, assigneeId));
+    const messages = [
+      ...await lineMessages(fetchImpl, base, line),
+      ...await wazzupMessages(fetchImpl, base, dealId, assigneeId),
+    ];
+    notes.dialog = readDialog(messages, operatorIdsFrom(line, assigneeId));
+    notes.heard = heardFrom(messages);
     let briefAt = "";
     let briefShot = "";
     for (const message of messages) {
@@ -933,6 +1319,8 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
       "STAGE_ID",
       "STAGE_SEMANTIC_ID",
       "ASSIGNED_BY_ID",
+      "CONTACT_ID",
+      "COMPANY_ID",
       "DATE_CREATE",
       "BEGINDATE",
       "CLOSEDATE",
@@ -999,6 +1387,7 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
       let brief = "";
       let finishBy = "";
       let talk = null;
+      let heard = null;
       if (proof) {
         finishBy = finishByText(row?.DATE_CREATE);
         const stageIsNew = field(stageName).toLowerCase() === "новая" || field(stageName).toLowerCase() === "новый";
@@ -1011,10 +1400,11 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
           const mark = proven("В комментарии карточки есть ТЗ.");
           if (mark) marks["AM-W1-4"] = mark;
         }
-        const dialog = await proofFromDialog(fetchImpl, base, field(row?.ID), now, assigneeId);
+        const dialog = await proofFromDialog(fetchImpl, base, field(row?.ID), now, assigneeId, row);
         Object.assign(marks, dialog.marks);
         brief = dialog.brief;
         talk = dialog.dialog;
+        heard = dialog.heard || null;
       }
       const late = proof ? lateMap(row?.DATE_CREATE, marks, now) : null;
       const stageFit = proof ? stageFitFor(stageName, row?.DATE_CREATE, now) : null;
@@ -1024,7 +1414,15 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
       const checklist = Array.isArray(visible)
         ? visible.map(({ title, state, assignee }) => ({ title, state, assignee }))
         : visible;
-      const report = named ? profileReport(Array.isArray(fullList) ? fullList : []) : null;
+      const profileLink = dealProfileLink(row, fields) || firstValue(row, linkFields);
+      const maps = named ? await readMapsProfile(fetchImpl, profileLink) : null;
+      const report = named ? controlBrief({
+        maps,
+        created: row?.DATE_CREATE,
+        now,
+        heard,
+        replies: talk?.replies,
+      }) : null;
       deals.push({
         id: field(row?.ID),
         title: organizationName(row?.TITLE),
