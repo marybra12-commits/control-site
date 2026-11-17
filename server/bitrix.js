@@ -244,7 +244,7 @@ function normalizedTitle(title) {
   return field(title).toLowerCase().replaceAll("ё", "е");
 }
 
-const RAKOV_MAPS = "https://yandex.ru/maps/-/CXSKA-pK";
+const RAKOV_MAPS = "https://yandex.ru/maps/-/CXSSVWPY";
 
 export function mapsLinkForDeal(title, found) {
   const link = field(found);
@@ -1094,7 +1094,19 @@ export function controlBrief({ maps, created, now, heard, replies, deal = {} }) 
         why: "На Картах это видно.",
       };
     }
-    if (fact.state !== "no" && (fromDeal || fromChat)) {
+    if (fromChat) {
+      return {
+        title: point.title,
+        stuck: "Нет",
+        missing: "Нет",
+        status: DONE,
+        state: "closed",
+        proof: fromChat,
+        say: "Ничего не говорить: в переписке это есть.",
+        why: fromChat,
+      };
+    }
+    if (fact.state !== "no" && fromDeal) {
       const proof = [fromDeal, fromChat].filter(Boolean).join(" ");
       return {
         title: point.title,
@@ -1122,28 +1134,7 @@ export function controlBrief({ maps, created, now, heard, replies, deal = {} }) 
         why: `${late && due ? `Срок ${due} прошёл, на Картах этого нет.` : due ? "Срок ещё не вышел." : "На Картах этого нет."}${chat}${pause}`,
       };
     }
-    const known = [fact.missing, fromDeal, fromChat].filter((line) => line && line !== NO_DATA);
-    if (point.key === "qr" && !known.length) {
-      if (!opened) {
-        return {
-          title: point.title,
-          stuck: NO_DATA,
-          missing: NO_DATA,
-          say: "QR на Картах не виден. Смотреть, только если его отправляли клиенту.",
-          why: NO_DATA,
-        };
-      }
-      const who = deal.assignee || "Менеджеру";
-      return {
-        title: point.title,
-        stuck: point.title,
-        missing: "QR профиля на Картах не виден.",
-        status: NOT_DONE,
-        state: "open",
-        say: `${who}: QR профиля на Картах не виден.`,
-        why: "На Картах этого нет.",
-      };
-    }
+    const known = [fact.missing, fromDeal].filter((line) => line && line !== NO_DATA);
     if (!opened && !deal.link && !known.length) {
       return {
         title: point.title,
@@ -1153,19 +1144,7 @@ export function controlBrief({ maps, created, now, heard, replies, deal = {} }) 
         why: NO_DATA,
       };
     }
-    const gap = known[0] || (deal.link ? "Страница Карт не открылась, этот пункт по ней не сверен." : "В выгрузке Карт этого поля нет.");
-    if (opened) {
-      const who = deal.assignee || "Менеджеру";
-      return {
-        title: point.title,
-        stuck: point.title,
-        missing: gap,
-        status: NOT_DONE,
-        state: "open",
-        say: `${who}: ${gap}`,
-        why: "На Картах этого нет.",
-      };
-    }
+    const gap = known[0] || (deal.link ? "На странице этого пункта нет." : "В выгрузке Карт этого поля нет.");
     return {
       title: point.title,
       stuck: point.title,
@@ -1445,15 +1424,17 @@ async function findOpenLine(fetchImpl, base, dealId) {
 function heardFrom(messages) {
   const blob = (Array.isArray(messages) ? messages : []).map((message) => messageText(message)).join(" ");
   return {
+    place: blob.includes("адрес") || blob.includes("геолок") || blob.includes("точка"),
+    head: blob.includes("шапк") || blob.includes("название"),
     cover: blob.includes("обложк") || blob.includes("логотип"),
     stories: blob.includes("сторис"),
     photo: blob.includes("фото"),
-    links: blob.includes("ссылк"),
+    links: blob.includes("ссылк") || blob.includes("сайт"),
     goods: blob.includes("товар") || blob.includes("витрин"),
     news: blob.includes("новост"),
     reviews: blob.includes("отзыв"),
-    seo: blob.includes("seo"),
-    qr: blob.includes("qr") || blob.includes("кьюар"),
+    seo: blob.includes("seo") || blob.includes("подпис"),
+    qr: blob.includes("qr") || blob.includes("кьюар") || blob.includes("qr-код") || blob.includes("куар"),
   };
 }
 

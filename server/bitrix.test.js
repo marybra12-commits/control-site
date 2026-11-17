@@ -339,7 +339,7 @@ test("each funnel keeps its active deals and drops a won card", async () => {
     unanswered: "Нет данных",
   });
   const rakovy = result.deals.find((deal) => deal.title === "Автосделка Раковой Двор Оформление+3Д");
-  assert.equal(rakovy.link, "https://yandex.ru/maps/-/CXSKA-pK");
+  assert.equal(rakovy.link, "https://yandex.ru/maps/-/CXSSVWPY");
   assert.equal(JSON.stringify(rakovy).includes("disk.yandex"), false);
   assert.equal(rakovy.address, "Набережная, 4, Санкт-Петербург");
   assert.equal(rakovy.period, "ноябрь");
@@ -392,7 +392,7 @@ test("each funnel keeps its active deals and drops a won card", async () => {
   assert.equal(goods.stuck, "Товары в витрине");
   assert.equal(goods.missing, "На Картах нет товаров в витрине.");
   assert.equal(goods.status, "Не сделано");
-  assert.equal(rakovy.report.find((item) => item.title === "QR-код").status, "Не сделано");
+  assert.notEqual(rakovy.report.find((item) => item.title === "QR-код").status, "Не сделано");
   assert.equal(rakovy.report.length, 11);
   assert.equal(packed.includes("заполните бриф"), false);
   assert.equal(packed.includes("Пожалуйста, жду макет"), true);
@@ -451,7 +451,7 @@ test("a present point, photos and goods stay done", () => {
     created: "2026-10-01",
     now: new Date("2026-11-17T12:00:00+03:00"),
     heard: {},
-    deal: { link: "https://yandex.ru/maps/-/CXSKA-pK" },
+    deal: { link: "https://yandex.ru/maps/-/CXSSVWPY" },
   });
   const status = (title) => rows.find((item) => item.title === title).status;
   assert.equal(status("Геолокация и вход"), "Сделано");
@@ -478,12 +478,21 @@ test("a goods tab and a news tab are not missing", () => {
     created: "2026-10-01",
     now: new Date("2026-11-17T12:00:00+03:00"),
     heard: {},
-    deal: { link: "https://yandex.ru/maps/-/CXSKA-pK" },
+    deal: { link: "https://yandex.ru/maps/-/CXSSVWPY" },
   });
   const status = (title) => rows.find((item) => item.title === title).status;
   assert.equal(status("Товары в витрине"), "Сделано");
   assert.equal(status("Новости"), "Сделано");
   assert.equal(rows.find((item) => item.title === "Новости").proof.includes("5"), true);
+  const withChat = controlBrief({
+    maps: profile,
+    created: "2026-10-01",
+    now: new Date("2026-11-17T12:00:00+03:00"),
+    heard: { qr: true },
+    deal: { link: "https://yandex.ru/maps/-/CXSSVWPY" },
+  });
+  assert.equal(withChat.find((item) => item.title === "QR-код").status, "Сделано");
+  assert.equal(withChat.find((item) => item.title === "QR-код").proof.includes("Wazzup"), true);
 });
 
 test("a Maps profile page yields the facts it actually contains", () => {
@@ -557,7 +566,7 @@ test("a later Bitrix failure still returns the named deal", async () => {
   assert.equal(result.connected, true);
   assert.equal(result.unavailable, undefined);
   const deal = result.deals.find((item) => item.title === "Автосделка Раковой Двор Оформление+3Д");
-  assert.equal(deal.link, "https://yandex.ru/maps/-/CXSKA-pK");
+  assert.equal(deal.link, "https://yandex.ru/maps/-/CXSSVWPY");
   assert.equal(JSON.stringify(result).includes("example.invalid"), false);
 });
 
