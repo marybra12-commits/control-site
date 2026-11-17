@@ -2,18 +2,22 @@ import { loadOformlenieDeals, serviceEnv } from "./bitrix.js";
 
 const WEBHOOK_ENV = "BITRIX_WEBHOOK_URL";
 
-export function envForRequest(context) {
-  const env = { ...serviceEnv() };
-  const sources = [context?.env, context];
-  for (const source of sources) {
-    if (!source || typeof source !== "object") continue;
+function readNamed(source) {
+  if (!source || (typeof source !== "object" && typeof source !== "function")) return "";
+  try {
     const value = source[WEBHOOK_ENV];
-    if (typeof value === "string" && value.trim()) {
-      env[WEBHOOK_ENV] = value;
-      break;
-    }
+    return typeof value === "string" ? value.trim() : "";
+  } catch {
+    return "";
   }
-  return env;
+}
+
+export function envForRequest(context) {
+  const live = serviceEnv();
+  const value = readNamed(live) || readNamed(context?.env) || readNamed(context) || readNamed(globalThis.env);
+  if (!value) return live;
+  if (readNamed(live) === value) return live;
+  return { ...live, [WEBHOOK_ENV]: value };
 }
 
 export async function GET(_request, context) {

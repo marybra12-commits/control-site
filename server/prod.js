@@ -32,7 +32,7 @@ function filePath(pathname) {
 createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   if (url.pathname === "/api/oformlenie") {
-    const response = await GET(req);
+    const response = await GET(req, { env: process.env });
     res.writeHead(response.status, {
       "content-type": "application/json; charset=utf-8",
       "cache-control": "no-store",

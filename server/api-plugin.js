@@ -1,4 +1,4 @@
-import { loadOformlenieDeals } from "./bitrix.js";
+import { loadOformlenieDeals, serviceEnv } from "./bitrix.js";
 
 function attach(server) {
   server.middlewares.use(async (req, res, next) => {
@@ -18,7 +18,7 @@ function attach(server) {
     }
 
     try {
-      const body = await loadOformlenieDeals();
+      const body = await loadOformlenieDeals(serviceEnv());
       res.end(JSON.stringify(body));
     } catch {
       res.end(JSON.stringify({ connected: false, deals: [] }));

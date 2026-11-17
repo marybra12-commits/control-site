@@ -17,6 +17,35 @@ async function withEnv(value, run) {
   }
 }
 
+test("published route reads the webhook from the request runtime env", async () => {
+  const hidden = new Proxy({}, {
+    get(_target, key) {
+      if (key === WEBHOOK_ENV) return "https://example.invalid/rest/1/placeholder";
+      return undefined;
+    },
+    ownKeys() {
+      return [];
+    },
+  });
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    async json() {
+      return { result: [] };
+    },
+  });
+  try {
+    await withEnv(undefined, async () => {
+      const response = await apiGet(new Request("http://127.0.0.1/api/oformlenie"), { env: hidden });
+      const body = await response.json();
+      assert.equal(body.connected, true);
+      assert.equal(JSON.stringify(body).includes("example.invalid"), false);
+    });
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 test("published routes stay disconnected when the runtime env is blank", async () => {
   await withEnv(undefined, async () => {
     for (const get of [appGet, apiGet]) {
