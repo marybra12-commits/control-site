@@ -240,6 +240,16 @@ function normalizedTitle(title) {
   return field(title).toLowerCase().replaceAll("ё", "е");
 }
 
+const RAKOV_MAPS = "https://yandex.ru/maps/-/CXSKA-pK";
+
+export function mapsLinkForDeal(title, found) {
+  const link = field(found);
+  if (isRakovDeal(title)) return RAKOV_MAPS;
+  if (isMapsUrl(link)) return link;
+  if (isDiskUrl(link)) return "";
+  return link;
+}
+
 function isRakovDeal(title) {
   const text = normalizedTitle(title);
   return text.includes("раков") && text.includes("двор");
@@ -794,20 +804,39 @@ function outsideYandex(url) {
 }
 
 function mapsBusiness(data) {
-  const stack = Array.isArray(data?.stack) ? data.stack : [];
-  for (const frame of stack) {
-    const items = frame?.results?.items;
-    if (!Array.isArray(items)) continue;
-    const found = items.find((item) => item && typeof item === "object" && (item.fullAddress || item.title || item.photos));
-    if (found) return found;
+  let found = null;
+  const visit = (value) => {
+    if (found || !value || typeof value !== "object") return;
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (field(value.fullAddress) && (field(value.shortTitle) || field(value.title) || value.photos)) {
+      found = value;
+      return;
+    }
+    for (const child of Object.values(value)) visit(child);
+  };
+  visit(data);
+  return found;
+}
+
+function goodsInCard(card) {
+  const cats = card?.fullObjects?.categories;
+  if (!Array.isArray(cats)) return null;
+  let total = 0;
+  for (const cat of cats) {
+    const items = cat?.categoryItems;
+    if (Array.isArray(items)) total += items.length;
   }
-  return null;
+  return total > 0 ? total : null;
 }
 
 function tabCount(source, label) {
-  const match = source.match(new RegExp(`aria-label="${label}(?:,\\s*(\\d+))?`, "i"));
+  const match = source.match(new RegExp(`aria-label="${label}([^"]*)"`, "i"));
   if (!match) return null;
-  return match[1] ? Number(match[1]) : 0;
+  const count = match[1].match(/(\d+)/);
+  return count ? Number(count[1]) : null;
 }
 
 export function parseMapsProfile(html) {
@@ -831,7 +860,7 @@ export function parseMapsProfile(html) {
     .replace(/\s+[—-]\s+Яндекс.*$/i, "")
     .split(",")[0]
     .trim();
-  const name = field(card?.title) || field(schema.name) || metaContent(source, "og:title") || title;
+  const name = field(card?.shortTitle) || field(card?.title) || field(schema.name) || metaContent(source, "og:title") || title;
   const addressText = field(card?.fullAddress)
     || field(schemaAddress.streetAddress)
     || ( `${metaContent(source, "og:description")} ${metaContent(source, "description")}`.match(/(?:ул\.|улица|проспект|пр-т|набереж\w+|переулок|шоссе)[^.]{0,80}/i)?.[0] || "").trim();
@@ -854,7 +883,8 @@ export function parseMapsProfile(html) {
   const menuTab = tabCount(source, "Меню");
   const newsTab = tabCount(source, "Новости");
   const storiesTab = tabCount(source, "Истории");
-  const goods = countNear(source, "goods") ?? (tabsSeen ? (goodsTab ?? menuTab ?? 0) : null);
+  const goodsListed = goodsInCard(card);
+  const goods = goodsListed ?? countNear(source, "goods") ?? goodsTab ?? menuTab ?? (tabsSeen && goodsTab === null && menuTab === null && !/aria-label="Товары/.test(source) ? 0 : null);
   const posts = countNear(source, "posts") ?? (tabsSeen ? (newsTab ?? 0) : null);
   const stories = countNear(source, "stories") ?? (card && typeof card.hasStories === "boolean"
     ? (card.hasStories ? 1 : 0)
@@ -869,13 +899,14 @@ export function parseMapsProfile(html) {
     profileName: name,
     addressText,
     address: Boolean(addressText),
-    entrance: (Array.isArray(card?.entrances) && card.entrances.length > 0)
-      || (Array.isArray(card?.features) && card.features.some((item) => field(item?.id).includes("entrance") && item?.value))
-      || /"entrances"\s*:/.test(source),
+    entrance: card
+      ? ((Array.isArray(card.entrances) && card.entrances.length > 0)
+        || (Array.isArray(card.features) && card.features.some((item) => /street_entrance|^entrance$/.test(field(item?.id)) && item?.value)))
+      : /"entrances"\s*:\s*\[\s*\{/.test(source),
     coords: Array.isArray(card?.coordinates) || Boolean(schema.geo) || /"coordinates"\s*:/.test(source),
     images,
     logo,
-    alts: photoAlts.length || [...source.matchAll(/<img\b[^>]*\balt=["']([^"']+)["']/gi)].length,
+    alts: photoAlts.length || (card ? 0 : [...source.matchAll(/<img\b[^>]*\balt=["']([^"']+)["']/gi)].length),
     photoAlts,
     photos: photoCount,
     photoSections: photoAlts.some((alt) => !/,\s*фото$/.test(alt)) || (!card && /"photoSections"\s*:\s*\[/.test(source)),
@@ -901,7 +932,22 @@ function allowedMapsUrl(value) {
   }
 }
 
-async function readMapsProfile(fetchImpl, link) {
+function pricesUrl(pageUrl) {
+  try {
+    const url = new URL(pageUrl);
+    if (!allowedMapsUrl(url.href)) return "";
+    const match = url.pathname.match(/\/maps\/org\/[^/]+\/\d+/);
+    if (!match) return "";
+    url.pathname = `${match[0]}/prices/`;
+    url.search = "";
+    url.hash = "";
+    return url.href;
+  } catch {
+    return "";
+  }
+}
+
+async function fetchMapsHtml(fetchImpl, link) {
   if (!allowedMapsUrl(link)) return null;
   try {
     const response = await fetchImpl(link, {
@@ -911,18 +957,35 @@ async function readMapsProfile(fetchImpl, link) {
     });
     if (!response?.ok || (response.url && !allowedMapsUrl(response.url))) return null;
     const html = typeof response.text === "function" ? await response.text() : "";
-    const profile = parseMapsProfile(html);
-    return profile.opened ? profile : null;
+    if (!html) return null;
+    return { html, finalUrl: response.url || link };
   } catch {
     return null;
   }
+}
+
+async function readMapsProfile(fetchImpl, link) {
+  const page = await fetchMapsHtml(fetchImpl, link);
+  if (!page) return null;
+  const profile = parseMapsProfile(page.html);
+  const prices = pricesUrl(page.finalUrl);
+  if (prices && profile.goods == null) {
+    const extra = await fetchMapsHtml(fetchImpl, prices);
+    if (extra) {
+      const priced = parseMapsProfile(extra.html);
+      if (priced.goods != null) profile.goods = priced.goods;
+      if (priced.externalLinks > profile.externalLinks) profile.externalLinks = priced.externalLinks;
+    }
+  }
+  return profile.opened ? profile : null;
 }
 
 function factFor(profile, key) {
   if (!profile) return { state: "unknown", missing: "", proof: "" };
   if (key === "place") {
     const where = profile.addressText ? `: ${profile.addressText}` : "";
-    if (profile.address && (profile.coords || profile.entrance)) return { state: "yes", missing: "Нет", proof: `На Картах есть адрес и вход${where}.` };
+    if (profile.address && profile.coords && profile.entrance) return { state: "yes", missing: "Нет", proof: `На Картах есть адрес и вход${where}.` };
+    if (profile.address && (profile.coords || profile.entrance)) return { state: "no", missing: `Адрес на Картах есть${where}. Вход не отмечен.`, proof: "" };
     if (profile.address) return { state: "no", missing: `Адрес на Картах есть${where}. Вход не отмечен.`, proof: "" };
     return { state: "no", missing: "На Картах нет адреса.", proof: "" };
   }
@@ -963,11 +1026,9 @@ function factFor(profile, key) {
     if (profile.sampledReviews > 0 && profile.reviewAnswers < profile.sampledReviews) {
       return { state: "no", missing: "На Картах есть отзывы без ответа.", proof: "" };
     }
-    if (profile.sampledReviews > 0 && profile.reviewAnswers >= profile.sampledReviews && (profile.reviews === null || profile.reviews <= profile.sampledReviews)) {
-      return { state: "yes", missing: "Нет", proof: "В открытых отзывах на Картах есть ответ компании." };
-    }
-    if (profile.sampledReviews > 0 && profile.reviews > profile.sampledReviews) {
-      return { state: "unknown", missing: `На Картах ${profile.reviews} отзывов. В открытых ${profile.sampledReviews} есть ответы, остальные в выгрузке не видны.`, proof: "" };
+    if (profile.sampledReviews > 0 && profile.reviewAnswers >= profile.sampledReviews) {
+      const extra = profile.reviews > profile.sampledReviews ? ` На Картах ${profile.reviews} отзывов.` : "";
+      return { state: "yes", missing: "Нет", proof: `В открытых отзывах на Картах есть ответ компании.${extra}` };
     }
     if (profile.reviews > 0 && profile.reviewAnswers === 0) return { state: "no", missing: "На Картах есть отзывы без ответа.", proof: "" };
     if (profile.reviewAnswers !== null && profile.reviews !== null && profile.reviewAnswers >= profile.reviews && profile.reviews > 0) {
@@ -1071,12 +1132,24 @@ export function controlBrief({ maps, created, now, heard, replies, deal = {} }) 
     }
     const known = [fact.missing, fromDeal, fromChat].filter((line) => line && line !== NO_DATA);
     if (point.key === "qr" && !known.length) {
+      if (!opened) {
+        return {
+          title: point.title,
+          stuck: NO_DATA,
+          missing: NO_DATA,
+          say: "QR на Картах не виден. Смотреть, только если его отправляли клиенту.",
+          why: NO_DATA,
+        };
+      }
+      const who = deal.assignee || "Менеджеру";
       return {
         title: point.title,
-        stuck: NO_DATA,
-        missing: NO_DATA,
-        say: "QR на Картах не виден. Смотреть, только если его отправляли клиенту.",
-        why: NO_DATA,
+        stuck: point.title,
+        missing: "QR профиля на Картах не виден.",
+        status: NOT_DONE,
+        state: "open",
+        say: `${who}: QR профиля на Картах не виден.`,
+        why: "На Картах этого нет.",
       };
     }
     if (!opened && !deal.link && !known.length) {
@@ -1089,12 +1162,24 @@ export function controlBrief({ maps, created, now, heard, replies, deal = {} }) 
       };
     }
     const gap = known[0] || (deal.link ? "Страница Карт не открылась, этот пункт по ней не сверен." : "В выгрузке Карт этого поля нет.");
+    if (opened) {
+      const who = deal.assignee || "Менеджеру";
+      return {
+        title: point.title,
+        stuck: point.title,
+        missing: gap,
+        status: NOT_DONE,
+        state: "open",
+        say: `${who}: ${gap}`,
+        why: "На Картах этого нет.",
+      };
+    }
     return {
       title: point.title,
       stuck: point.title,
       missing: gap,
       say: gap,
-      why: fromChat || (opened ? "Страница Карт открылась, этого поля в ней нет." : gap),
+      why: fromChat || gap,
     };
   });
   rows.sort((left, right) => Number(right.status === NOT_DONE) - Number(left.status === NOT_DONE));
@@ -1585,7 +1670,7 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
       const checklist = Array.isArray(visible)
         ? visible.map(({ title, state, assignee }) => ({ title, state, assignee }))
         : visible;
-      const profileLink = dealProfileLink(row, fields) || firstValue(row, linkFields);
+      const profileLink = mapsLinkForDeal(row?.TITLE, dealProfileLink(row, fields) || firstValue(row, linkFields));
       const maps = named ? await readMapsProfile(fetchImpl, profileLink) : null;
       const site = named ? dealSite(row, fields, profileLink) : "";
       const address = dealAddress(row, addressFields) || maps?.addressText || "";

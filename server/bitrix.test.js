@@ -63,7 +63,7 @@ test("each funnel keeps its active deals and drops a won card", async () => {
     async (url, options) => {
       calls.push({ url, options });
       if (String(url).startsWith("https://yandex.ru/maps/")) {
-        const html = `<script type="application/ld+json">{"@type":"LocalBusiness","name":"Раковый двор","address":{"streetAddress":"Набережная, 4"},"geo":{"latitude":1,"longitude":2},"image":["https://yandex.ru/cover.jpg","https://yandex.ru/logo.jpg"],"url":"https://example.invalid/site"}</script>"photos":{"count":3}"photoSections":[]"goods":{"count":0}"posts":{"count":1}"stories":{"count":0}"reviews":{"count":2}"reviewAnswers":{"count":0}"entrances":[]`;
+        const html = `<script type="application/ld+json">{"@type":"LocalBusiness","name":"Раковый двор","address":{"streetAddress":"Набережная, 4"},"geo":{"latitude":1,"longitude":2},"image":["https://yandex.ru/cover.jpg","https://yandex.ru/logo.jpg"],"url":"https://example.invalid/site"}</script>"photos":{"count":3}"photoSections":[]"goods":{"count":0}"posts":{"count":1}"stories":{"count":0}"reviews":{"count":2}"reviewAnswers":{"count":0}"entrances":[{"coordinates":[1,2]}]`;
         return {
           ok: true,
           url,
@@ -337,7 +337,7 @@ test("each funnel keeps its active deals and drops a won card", async () => {
     managerTone: "Нет данных",
   });
   const rakovy = result.deals.find((deal) => deal.title === "Автосделка Раковой Двор Оформление+3Д");
-  assert.equal(rakovy.link, "https://yandex.ru/maps/org/rakovy-dvor/42");
+  assert.equal(rakovy.link, "https://yandex.ru/maps/-/CXSKA-pK");
   assert.equal(JSON.stringify(rakovy).includes("disk.yandex"), false);
   assert.equal(rakovy.address, "Набережная, 4, Санкт-Петербург");
   assert.equal(rakovy.period, "ноябрь");
@@ -385,7 +385,7 @@ test("each funnel keeps its active deals and drops a won card", async () => {
   assert.equal(goods.stuck, "Товары в витрине");
   assert.equal(goods.missing, "На Картах нет товаров в витрине.");
   assert.equal(goods.status, "Не сделано");
-  assert.equal(rakovy.report.find((item) => item.title === "QR-код").stuck, "Нет данных");
+  assert.equal(rakovy.report.find((item) => item.title === "QR-код").status, "Не сделано");
   assert.equal(rakovy.report.length, 11);
   assert.equal(packed.includes("заполните бриф"), false);
   assert.equal(packed.includes("жду макет"), false);
