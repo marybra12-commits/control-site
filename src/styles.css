@@ -179,6 +179,22 @@ dd {
   font-weight: 500;
 }
 
+.check-proof {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.check-shot {
+  display: block;
+  max-width: 220px;
+  margin-top: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
 .pill {
   display: inline-flex;
   align-items: center;

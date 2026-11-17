@@ -44,12 +44,40 @@ function knownLink(deals, organization) {
   return link;
 }
 
+function safeShot(value) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!/^https?:\/\//i.test(text) || text.toLowerCase().includes("/rest/")) return "";
+  return text;
+}
+
+const pilotSteps = [
+  { code: "AM-D0-2", title: "Приветствие" },
+  { code: "AM-D0-3", title: "Бриф" },
+  { code: "AM-D0-4", title: "Где общаться" },
+  { code: "AM-W1-1", title: "Доступ или новая точка" },
+  { code: "AM-W1-4", title: "Материалы и ТЗ дизайнеру" },
+];
+
 function checklist(section, deal) {
-  return (section.checks || []).map((check) => ({
-    code: check.code,
-    title: check.title,
-    status: deal.marks?.[check.code] || noData,
-  }));
+  const steps = [...(section.checks || [])];
+  if (deal.pilot) {
+    for (const step of pilotSteps) {
+      if (!steps.some((item) => item.code === step.code)) steps.push(step);
+    }
+  }
+  return steps.map((check) => {
+    const mark = deal.marks?.[check.code];
+    const proof = mark && typeof mark === "object" ? String(mark.proof || "").trim() : "";
+    const image = mark && typeof mark === "object" ? safeShot(mark.image) : "";
+    const done = Boolean(proof || image);
+    return {
+      code: check.code,
+      title: check.title,
+      status: done ? "Сделано" : noData,
+      proof: done ? proof : "",
+      image: done ? image : "",
+    };
+  });
 }
 
 function ReviewsTable({ deals }) {
@@ -123,12 +151,19 @@ function DealDetail({ section, deal, onBack }) {
           {checks.map((check) => (
             <li key={check.code} className="check">
               <span className="check-code">{check.code}</span>
-              <span className="check-title">{check.title}</span>
+              <span className="check-title">
+                {check.title}
+                {check.status === "Сделано" && check.proof ? <span className="check-proof">{check.proof}</span> : null}
+                {check.status === "Сделано" && check.image ? <img className="check-shot" alt="" src={check.image} /> : null}
+              </span>
               <span className={check.status === "Сделано" ? "pill pill-done" : "pill"}>{check.status}</span>
             </li>
           ))}
         </ul>
       ) : null}
+      {deal.finishBy ? <p className="rule">Оформление сдать в течение месяца от старта, до {deal.finishBy}.</p> : null}
+      {deal.brief ? <p className="rule">Бриф: {deal.brief}</p> : null}
+      <p className="rule">Чеклист обновляется каждый час. Зелёным только шаг, у которого есть текст или снимок.</p>
       <p className="rule">Нет следа в Битриксе — «Нет данных», не «Не сделано».</p>
     </article>
   );
@@ -196,21 +231,29 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const controller = new AbortController();
-    fetch("/api/oformlenie", { signal: controller.signal, cache: "no-store" })
-      .then((response) => response.json())
-      .then((body) => {
-        setBitrix({
-          connected: body?.connected === true,
-          unavailable: body?.unavailable === true,
-          deals: Array.isArray(body?.deals) ? body.deals : [],
+    let ignore = false;
+    const load = () => {
+      fetch("/api/oformlenie", { cache: "no-store" })
+        .then((response) => response.json())
+        .then((body) => {
+          if (ignore) return;
+          setBitrix({
+            connected: body?.connected === true,
+            unavailable: body?.unavailable === true,
+            deals: Array.isArray(body?.deals) ? body.deals : [],
+          });
+        })
+        .catch(() => {
+          if (ignore) return;
+          setBitrix({ connected: false, unavailable: false, deals: [] });
         });
-      })
-      .catch((error) => {
-        if (error?.name === "AbortError") return;
-        setBitrix({ connected: false, unavailable: false, deals: [] });
-      });
-    return () => controller.abort();
+    };
+    load();
+    const timer = window.setInterval(load, 60 * 60 * 1000);
+    return () => {
+      ignore = true;
+      window.clearInterval(timer);
+    };
   }, []);
 
   const section = sections.find((item) => item.id === currentId) ?? sections[0];

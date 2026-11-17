@@ -226,11 +226,18 @@ function present(value) {
   return value || NO_DATA;
 }
 
+const PIPELINES = new Map([
+  ["оформление якарты/аналитика", "oformlenie"],
+  ["карты поддержка", "podderzhka"],
+]);
+
 export function pipelineSection(name) {
-  const text = field(name).toLowerCase().replaceAll("ё", "е");
-  if (text.includes("оформлен")) return "oformlenie";
-  if (text.includes("поддерж")) return "podderzhka";
-  return "";
+  const text = field(name).toLowerCase().replaceAll("ё", "е").replace(/\s*\/\s*/g, "/").replace(/\s+/g, " ").trim();
+  return PIPELINES.get(text) || "";
+}
+
+function isProofClient(title) {
+  return field(title).toLowerCase().replaceAll("ё", "е").includes("островок надежды магазин продуктов");
 }
 
 function pipelinesFromCategories(result) {
@@ -313,13 +320,157 @@ const STARTER_CHECKS = [
   { code: "AM-W1-1", title: "Доступ или новая точка" },
 ];
 
+const PILOT_CHECKS = [
+  ...STARTER_CHECKS,
+  { code: "AM-D0-3", title: "Бриф" },
+  { code: "AM-D0-4", title: "Где общаться" },
+  { code: "AM-W1-4", title: "Материалы и ТЗ дизайнеру" },
+];
+
+function dayKey(value) {
+  const parsed = parseBitrixDate(value);
+  return parsed ? moscowParts(parsed).key : "";
+}
+
+function finishByText(created) {
+  const key = dayKey(created);
+  if (!key) return "";
+  return formatDay(addDays(key, 29));
+}
+
+function daysAfter(created, now) {
+  const start = dayKey(created);
+  const end = moscowParts(now).key;
+  if (!start || !end) return null;
+  const from = atMoscowHour(start, 12).getTime();
+  const to = atMoscowHour(end, 12).getTime();
+  return Math.round((to - from) / 86400000);
+}
+
+function messageText(row) {
+  return [row?.text, row?.message, row?.MESSAGE].map((item) => field(item).toLowerCase().replaceAll("ё", "е")).join(" ");
+}
+
+function messageDate(row) {
+  return field(row?.date || row?.DATE || row?.DATE_CREATE);
+}
+
+function chatIdFrom(result) {
+  const rows = Array.isArray(result) ? result : result && typeof result === "object" ? [result] : [];
+  for (const row of rows) {
+    const id = field(row?.CHAT_ID || row?.chatId);
+    if (id) return id;
+  }
+  return "";
+}
+
+function channelProof(result) {
+  const rows = Array.isArray(result) ? result : result && typeof result === "object" ? [result] : [];
+  for (const row of rows) {
+    const text = [row?.CONNECTOR_ID, row?.CONNECTOR_TITLE, row?.entity_id, row?.ENTITY_ID].map(field).join(" ").toLowerCase();
+    if (text.includes("whatsapp")) return "Линия открыта в WhatsApp.";
+    if (text.includes("telegram")) return "Линия открыта в Telegram.";
+    if (text.includes("max")) return "Линия открыта в Max.";
+  }
+  return "";
+}
+
+function messageList(result) {
+  if (Array.isArray(result)) return result;
+  if (Array.isArray(result?.messages)) return result.messages;
+  if (Array.isArray(result?.MESSAGES)) return result.MESSAGES;
+  return [];
+}
+
+function publicImage(value) {
+  const url = field(value);
+  if (!/^https?:\/\//i.test(url)) return "";
+  if (url.toLowerCase().includes("/rest/")) return "";
+  return url;
+}
+
+function shotFrom(message) {
+  const files = [
+    ...(Array.isArray(message?.files) ? message.files : []),
+    ...(Array.isArray(message?.FILES) ? message.FILES : []),
+  ];
+  for (const file of files) {
+    const url = publicImage(file?.url || file?.URL || file?.link);
+    const kind = field(file?.type || file?.TYPE).toLowerCase();
+    if (url && (kind.includes("image") || /\.(png|jpe?g|webp|gif)(\?|$)/i.test(url))) return url;
+  }
+  return "";
+}
+
+function proven(proof, image = "") {
+  const text = field(proof);
+  const shot = publicImage(image);
+  if (!text && !shot) return null;
+  return { proof: text, image: shot };
+}
+
+async function proofFromDialog(fetchImpl, base, dealId, now) {
+  const notes = { brief: NO_DATA, marks: {} };
+  try {
+    const chat = await postResult(fetchImpl, endpointFor(base, "imopenlines.crm.chat.get.json"), {
+      CRM_ENTITY_TYPE: "DEAL",
+      CRM_ENTITY: dealId,
+    });
+    const channel = proven(channelProof(chat.result));
+    if (channel) notes.marks["AM-D0-4"] = channel;
+    const chatId = chatIdFrom(chat.result);
+    if (!chatId) return notes;
+    const history = await postResult(fetchImpl, endpointFor(base, "im.dialog.messages.get.json"), {
+      DIALOG_ID: `chat${chatId}`,
+      LIMIT: 50,
+    });
+    let briefAt = "";
+    let briefShot = "";
+    for (const message of messageList(history.result)) {
+      const text = messageText(message);
+      const sent = messageDate(message);
+      const shot = shotFrom(message);
+      if (!briefAt && (text.includes("1faipqlsdtturke79hrfeyfkel1afonn-sv-juoztjgqqv29-sii_tig") || text.includes("заполните бриф"))) {
+        briefAt = sent;
+        briefShot = shot;
+      }
+      if (text.includes("менеджер по оформлению") || text.includes("оформлением вашего профиля")) {
+        const phrase = text.includes("менеджер по оформлению") ? "менеджер по оформлению" : "оформлением вашего профиля";
+        const mark = proven(`В переписке написано «${phrase}».`, shot);
+        if (mark) notes.marks["AM-D0-2"] = mark;
+      }
+      const asksCode = text.includes("код") && (text.includes("смс") || text.includes("номер"));
+      if (asksCode || text.includes("создадим новую точку") || text.includes("мини-экскурсия")) {
+        const mark = proven(asksCode ? "В переписке запрошен код на номер." : "В переписке есть инструкция для новой точки.", shot);
+        if (mark) notes.marks["AM-W1-1"] = mark;
+      }
+      if (text.includes("max") && text.includes("whatsapp") && text.includes("telegram")) {
+        const mark = proven("В одном сообщении названы Max, WhatsApp и Telegram.", shot);
+        if (mark) notes.marks["AM-D0-4"] = mark;
+      }
+    }
+    if (briefAt) {
+      const passed = daysAfter(briefAt, now);
+      const when = formatDay(briefAt) || NO_DATA;
+      notes.brief = passed !== null && passed >= 3
+        ? `отправлен ${when}, 3 дня прошли`
+        : `отправлен ${when}, 3 дня ещё не прошли`;
+      const mark = proven(`Бриф ${notes.brief}.`, briefShot);
+      if (mark) notes.marks["AM-D0-3"] = mark;
+    }
+  } catch {
+    return notes;
+  }
+  return notes;
+}
+
 async function listActiveDeals(fetchImpl, base, categoryId, select) {
   const rows = [];
   let start = 0;
   for (let page = 0; page < 3; page += 1) {
     const listed = await postResult(fetchImpl, endpointFor(base, DEAL_LIST_METHOD), {
       start,
-      filter: { CATEGORY_ID: categoryId, STAGE_SEMANTIC_ID: "P" },
+      filter: { CATEGORY_ID: categoryId, CLOSED: "N" },
       select,
       order: { DATE_CREATE: "DESC" },
     });
@@ -368,6 +519,7 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
       "DATE_CREATE",
       "BEGINDATE",
       "CLOSEDATE",
+      "COMMENTS",
       periodField,
       ...linkFields,
       ...addressFields,
@@ -400,12 +552,6 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
     ]);
     const stages = stageNames(statuses.result);
     const people = usersById(users.result);
-    const supportLoad = new Map();
-    for (const item of rows) {
-      const assigneeId = field(item.row?.ASSIGNED_BY_ID);
-      if (!assigneeId || item.funnel !== "podderzhka") continue;
-      supportLoad.set(assigneeId, (supportLoad.get(assigneeId) ?? 0) + 1);
-    }
 
     const deals = [];
     for (const item of rows) {
@@ -414,15 +560,26 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
       const stageName = stages.get(stageId) ?? "";
       if (!isActiveDeal(row, stageName)) continue;
       const assigneeId = field(row?.ASSIGNED_BY_ID);
-      const marks = dealMarks({
-        created: row?.DATE_CREATE,
-        stageId,
-        stageName,
-        assignee: assigneeId,
-        funnel: item.funnel,
-        supportLoad: supportLoad.get(assigneeId) ?? 0,
-        now,
-      });
+      const proof = item.funnel === "oformlenie" && isProofClient(row?.TITLE);
+      const marks = {};
+      let brief = "";
+      let finishBy = "";
+      if (proof) {
+        finishBy = finishByText(row?.DATE_CREATE);
+        const stageIsNew = field(stageName).toLowerCase() === "новая" || field(stageName).toLowerCase() === "новый";
+        const person = people.get(assigneeId) ?? "";
+        if (person && stageName && !stageIsNew) {
+          const mark = proven(`Стадия «${stageName}», ответственная ${person}.`);
+          if (mark) marks["AM-D0-1"] = mark;
+        }
+        if (field(row?.COMMENTS).toLowerCase().includes("тз")) {
+          const mark = proven("В комментарии карточки есть ТЗ.");
+          if (mark) marks["AM-W1-4"] = mark;
+        }
+        const dialog = await proofFromDialog(fetchImpl, base, field(row?.ID), now);
+        Object.assign(marks, dialog.marks);
+        brief = dialog.brief;
+      }
       deals.push({
         id: field(row?.ID),
         title: organizationName(row?.TITLE),
@@ -432,14 +589,25 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
         assignee: present(people.get(assigneeId) ?? ""),
         stage: present(stageName),
         funnel: item.funnel,
+        ...(finishBy ? { finishBy } : {}),
+        ...(brief ? { brief } : {}),
+        ...(proof ? { pilot: true } : {}),
         marks,
-        checks: STARTER_CHECKS.map((check) => ({
-          code: check.code,
-          title: check.title,
-          status: marks[check.code] || NO_DATA,
-        })),
+        checks: (proof ? PILOT_CHECKS : STARTER_CHECKS).map((check) => {
+          const mark = marks[check.code];
+          const proof = field(mark?.proof);
+          const image = publicImage(mark?.image);
+          return {
+            code: check.code,
+            title: check.title,
+            status: proof || image ? DONE : NO_DATA,
+            ...(proof ? { proof } : {}),
+            ...(image ? { image } : {}),
+          };
+        }),
       });
     }
+    deals.sort((left, right) => Number(isProofClient(right.title)) - Number(isProofClient(left.title)));
     return { connected: true, deals };
   } catch {
     return { connected: false, unavailable: true, deals: [] };
