@@ -211,6 +211,43 @@ function DealDetail({ section, deal, onBack }) {
           </ul>
         </section>
       ) : null}
+      {Array.isArray(deal.report) ? (
+        <section className="bitrix-work" aria-label="Отчёт по чек-листу">
+          <h3>Отчёт по чек-листу «Настроить профиль по сделке»</h3>
+          <ul className="checks report-checks">
+            {deal.report.map((item) => {
+              const key = `report:${item.title}`;
+              const opened = openProof === key;
+              return (
+                <li key={item.title} className="check check-report">
+                  <span className="check-title">
+                    {item.title}
+                    {item.state === "open" ? <span className="late-tag">Пункт открыт</span> : null}
+                    {item.state === "closed" ? <span className="check-proof">Пункт закрыт</span> : null}
+                  </span>
+                  {item.status === "Сделано" ? (
+                    <button
+                      type="button"
+                      className="done-button"
+                      aria-expanded={opened}
+                      onClick={() => setOpenProof(opened ? "" : key)}
+                    >
+                      Сделано
+                    </button>
+                  ) : (
+                    <span className={item.status === "Не сделано" ? "pill pill-open" : "pill"}>{item.status || noData}</span>
+                  )}
+                  {opened ? (
+                    <div className="proof-panel">
+                      <p>{item.proof || noData}</p>
+                    </div>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
       {rows.length > 0 ? (
         <ul className="checks">
           {rows.map((check) => {
@@ -249,7 +286,11 @@ function DealDetail({ section, deal, onBack }) {
       {deal.finishBy ? <p className="rule">Оформление сдать в течение месяца от старта, до {deal.finishBy}.</p> : null}
       {deal.brief ? <p className="rule">Бриф: {deal.brief}</p> : null}
       <p className="rule">Чеклист обновляется каждый час. Зелёная кнопка «Сделано» открывает текст или снимок. Без следа шаг остаётся «Нет данных».</p>
-      <p className="rule">Нет следа в Битриксе — «Нет данных», не «Не сделано».</p>
+      <p className="rule">
+        {Array.isArray(deal.report)
+          ? "Незакрытый пункт этого чек-листа — «Не сделано». Если пункта в Битриксе нет — «Нет данных»."
+          : "Нет следа в Битриксе — «Нет данных», не «Не сделано»."}
+      </p>
     </article>
   );
 }
@@ -291,6 +332,35 @@ function DealCards({ deals, onOpen }) {
   );
 }
 
+function foldText(value) {
+  return String(value || "").toLocaleLowerCase("ru").replaceAll("ё", "е").trim();
+}
+
+function DealTools({ query, manager, managers, onQuery, onManager }) {
+  return (
+    <div className="deal-tools">
+      <label className="tool">
+        <span>Поиск</span>
+        <input
+          type="search"
+          value={query}
+          placeholder="Название сделки"
+          onChange={(event) => onQuery(event.target.value)}
+        />
+      </label>
+      <label className="tool">
+        <span>Менеджер</span>
+        <select value={manager} onChange={(event) => onManager(event.target.value)}>
+          <option value="">Все</option>
+          {managers.map((name) => (
+            <option key={name} value={name}>{name}</option>
+          ))}
+        </select>
+      </label>
+    </div>
+  );
+}
+
 function clientNote(bitrix) {
   if (bitrix.pending) return "Читаем сделки из Битрикса…";
   if (bitrix.connected && bitrix.deals.length === 0) return "Сделок в Битриксе нет.";
@@ -301,6 +371,8 @@ function clientNote(bitrix) {
 export default function App() {
   const [currentId, setCurrentId] = useState(sectionFromHash);
   const [openDealId, setOpenDealId] = useState(null);
+  const [query, setQuery] = useState("");
+  const [manager, setManager] = useState("");
   const [bitrix, setBitrix] = useState({
     connected: false,
     unavailable: false,
@@ -350,7 +422,17 @@ export default function App() {
 
   const section = sections.find((item) => item.id === currentId) ?? sections[0];
   const sectionDeals = dealsForSection(section, bitrix.deals);
-  const openDeal = sectionDeals.find((deal, index) => dealKey(deal, index) === openDealId) ?? null;
+  const managers = [...new Set(sectionDeals.map((deal) => deal.assignee).filter((name) => name && name !== noData))]
+    .sort((left, right) => left.localeCompare(right, "ru"));
+  const needle = foldText(query);
+  const visibleDeals = sectionDeals.filter((deal) => {
+    if (needle && !foldText(deal.title).includes(needle)) return false;
+    if (manager && deal.assignee !== manager) return false;
+    return true;
+  });
+  const openDeal = visibleDeals.find((deal, index) => dealKey(deal, index) === openDealId)
+    ?? sectionDeals.find((deal, index) => dealKey(deal, index) === openDealId)
+    ?? null;
 
   function openSection(id) {
     if (window.location.hash !== `#${id}`) {
@@ -358,6 +440,8 @@ export default function App() {
     }
     setCurrentId(id);
     setOpenDealId(null);
+    setQuery("");
+    setManager("");
   }
 
   const showReviews = section.id === "otzyvy";
@@ -406,7 +490,22 @@ export default function App() {
           ) : showDetail ? (
             <DealDetail key={openDealId} section={section} deal={openDeal} onBack={() => setOpenDealId(null)} />
           ) : showDeals ? (
-            <DealCards deals={sectionDeals} onOpen={setOpenDealId} />
+            <>
+              <DealTools
+                query={query}
+                manager={managers.includes(manager) ? manager : ""}
+                managers={managers}
+                onQuery={setQuery}
+                onManager={setManager}
+              />
+              {visibleDeals.length > 0 ? (
+                <DealCards deals={visibleDeals} onOpen={setOpenDealId} />
+              ) : (
+                <section className="card empty-card">
+                  <p>Таких сделок нет.</p>
+                </section>
+              )}
+            </>
           ) : (
             <section className="card empty-card">
               <p>{sectionDeals.length === 0 && bitrix.connected ? "Сделок в Битриксе нет." : clientNote(bitrix)}</p>

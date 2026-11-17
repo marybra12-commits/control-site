@@ -69,6 +69,8 @@ test("each funnel keeps its active deals and drops a won card", async () => {
           { FIELD_NAME: "UF_PERIOD", LIST_COLUMN_LABEL: { ru: "Период" } },
           { FIELD_NAME: "UF_LINK", EDIT_FORM_LABEL: { ru: "Ссылка" } },
           { FIELD_NAME: "UF_ADDRESS", LIST_COLUMN_LABEL: "Адрес точки" },
+          { FIELD_NAME: "UF_MAPS", USER_TYPE_ID: "string", LIST_COLUMN_LABEL: "Организация" },
+          { FIELD_NAME: "UF_NOTE", USER_TYPE_ID: "string", LIST_COLUMN_LABEL: "Заметка" },
         ],
         "crm.dealcategory.list.json": [
           { ID: "2", NAME: "Оформление ЯКарты/Аналитика" },
@@ -137,7 +139,7 @@ test("each funnel keeps its active deals and drops a won card", async () => {
             },
             {
               ID: 31,
-              TITLE: "Раковый двор",
+              TITLE: "Автосделка Раковой Двор Оформление+3Д",
               CATEGORY_ID: "2",
               STAGE_ID: "C2:PREPARATION",
               STAGE_SEMANTIC_ID: "P",
@@ -163,6 +165,7 @@ test("each funnel keeps its active deals and drops a won card", async () => {
               STAGE_SEMANTIC_ID: "P",
               ASSIGNED_BY_ID: 4,
               DATE_CREATE: "2026-11-02T11:00:00+03:00",
+              UF_NOTE: "https://example.invalid/not-the-profile",
             },
             {
               ID: 13,
@@ -177,6 +180,36 @@ test("each funnel keeps its active deals and drops a won card", async () => {
             resultRows = [];
           }
         }
+      }
+      if (method === "crm.deal.get.json" && String(body.id) === "31") {
+        resultRows = {
+          ID: 31,
+          UF_HIDDEN_MAP: { url: "https://yandex.ru/maps/org/rakovy-dvor/42" },
+          UF_HIDDEN_ADDRESS: { ADDRESS_1: "Набережная, 4", CITY: "Санкт-Петербург" },
+          UF_PERIOD: "ноябрь",
+        };
+      }
+      if (method === "tasks.task.list.json") {
+        const crm = String(body.filter?.UF_CRM_TASK || "");
+        resultRows = crm === "D_31"
+          ? { tasks: [{ id: "61", title: "Оформление", responsibleId: "8" }] }
+          : { tasks: [{ id: "50", title: "Оформление", responsibleId: "9" }] };
+      }
+      if (method === "task.checklistitem.getlist.json" && String(body.TASKID) === "61") {
+        const open = (id, title) => ({ ID: id, TITLE: title, PARENT_ID: "10", IS_COMPLETE: "N" });
+        resultRows = [
+          { ID: "10", TITLE: "Настроить профиль по сделке", PARENT_ID: "0", IS_COMPLETE: "N" },
+          open("11", "Геолокация и вход"),
+          { ID: "12", TITLE: "Шапка профиля", PARENT_ID: "10", IS_COMPLETE: "Y", MEMBERS: [{ TYPE: "A", NAME: "Лиана" }] },
+          open("13", "Оформление (обложка, логотип, карточки товаров)"),
+          open("14", "Фото по разделам"),
+          open("15", "Внешние ссылки"),
+          open("16", "Товары в витрину до 20 шт."),
+          open("17", "Новости 5 шт."),
+          open("18", "Ответы на отзывы"),
+          open("19", "QR-код"),
+          open("20", "Лента сторис"),
+        ];
       }
       if (method === "imopenlines.crm.chat.get.json" && String(body.CRM_ENTITY) === "21") {
         resultRows = { CHAT_ID: "77", CONNECTOR_ID: "whatsapp" };
@@ -233,11 +266,13 @@ test("each funnel keeps its active deals and drops a won card", async () => {
     "UF_PERIOD",
     "UF_LINK",
     "UF_ADDRESS",
+    "UF_MAPS",
+    "UF_NOTE",
   ]);
   assert.equal(result.connected, true);
   assert.deepEqual(result.deals.map((deal) => deal.title), [
     "Островок надежды магазин продуктов",
-    "Раковый двор",
+    "Автосделка Раковой Двор Оформление+3Д",
     "Раковый двор на набережной",
     "ИП Иванова Анна",
     "Кафе Волна",
@@ -272,7 +307,12 @@ test("each funnel keeps its active deals and drops a won card", async () => {
     replies: "Нет данных",
     managerTone: "Нет данных",
   });
-  const rakovy = result.deals[1];
+  const rakovy = result.deals.find((deal) => deal.title === "Автосделка Раковой Двор Оформление+3Д");
+  assert.equal(rakovy.link, "https://yandex.ru/maps/org/rakovy-dvor/42");
+  assert.equal(rakovy.address, "Набережная, 4, Санкт-Петербург");
+  assert.equal(rakovy.period, "ноябрь");
+  assert.equal(rakovy.assignee, "Ольга Воробьева");
+  assert.equal(rakovy.stage, "В работе");
   assert.equal(rakovy.pilot, true);
   assert.equal(rakovy.stage, "В работе");
   assert.equal(rakovy.stageFit.state, "right");
@@ -280,17 +320,19 @@ test("each funnel keeps its active deals and drops a won card", async () => {
   assert.equal(rakovy.dialog.clientTone, "спокойный");
   assert.equal(rakovy.dialog.replies, "отвечает в пределах трёх дней");
   assert.equal(rakovy.dialog.managerTone, "спокойный");
-  assert.equal(rakovy.checklist[0].state, "closed");
-  assert.equal(rakovy.checklist[1].state, "open");
+  assert.equal(rakovy.checklist.find((item) => item.title === "Шапка профиля").state, "closed");
+  assert.equal(rakovy.checklist.find((item) => item.title === "Геолокация и вход").state, "open");
+  assert.equal(rakovy.checklist.some((item) => item.title === "Настроить профиль по сделке"), false);
   const shore = result.deals.find((deal) => deal.title === "Раковый двор на набережной");
   assert.equal(shore.funnel, "oformlenie");
   assert.equal(shore.pipeline, "Продажи");
   assert.equal(shore.pilot, true);
   assert.ok(calls.some((call) => {
     if (!String(call.url).endsWith("/crm.deal.list.json")) return false;
-    return JSON.parse(call.options.body).filter["%TITLE"] === "Раковый двор";
+    return JSON.parse(call.options.body).filter["%TITLE"] === "Раковой";
   }));
   const ivanova = result.deals.find((deal) => deal.title === "ИП Иванова Анна");
+  assert.equal(ivanova.link, "https://example.invalid/card");
   assert.equal(ivanova.pilot, undefined);
   assert.equal(ivanova.late, undefined);
   assert.equal(ivanova.checklist, undefined);
@@ -298,12 +340,18 @@ test("each funnel keeps its active deals and drops a won card", async () => {
   assert.equal(ivanova.stage, "В работе");
   assert.equal(ivanova.checks.find((check) => check.code === "AM-D0-1").status, "Нет данных");
   assert.equal(result.deals.find((deal) => deal.title === "Кафе Волна").funnel, "podderzhka");
+  assert.equal(result.deals.find((deal) => deal.title === "Кафе Волна").link, "Нет данных");
   const packed = JSON.stringify(result);
   assert.equal(packed.includes("placeholder"), false);
   assert.equal(packed.includes("C2:WON"), false);
   assert.equal(packed.includes("Договор"), false);
   assert.equal(packed.includes("Магазин электрики"), false);
-  assert.equal(packed.includes("Не сделано"), false);
+  assert.equal(JSON.stringify(ostrovok).includes("Не сделано"), false);
+  assert.equal(rakovy.report.find((item) => item.title === "Геолокация и вход").status, "Не сделано");
+  assert.equal(rakovy.report.find((item) => item.title === "Шапка профиля").status, "Сделано");
+  assert.equal(rakovy.report.find((item) => item.status === "Сделано").proof.includes("Настроить профиль"), true);
+  assert.equal(rakovy.report.find((item) => item.title === "SEO фото").status, "Нет данных");
+  assert.equal(rakovy.report.length, 11);
   assert.equal(packed.includes("заполните бриф"), false);
   assert.equal(packed.includes("жду макет"), false);
   assert.equal(packed.includes("Смирнова"), true);

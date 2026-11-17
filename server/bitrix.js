@@ -240,13 +240,18 @@ function normalizedTitle(title) {
   return field(title).toLowerCase().replaceAll("ё", "е");
 }
 
+function isRakovDeal(title) {
+  const text = normalizedTitle(title);
+  return text.includes("раков") && text.includes("двор");
+}
+
 function isProofClient(title) {
   const text = normalizedTitle(title);
-  return text.includes("островок надежды магазин продуктов") || text.includes("раковый двор");
+  return text.includes("островок надежды магазин продуктов") || isRakovDeal(title);
 }
 
 function isNamedDeal(title) {
-  return normalizedTitle(title).includes("раковый двор");
+  return isRakovDeal(title);
 }
 
 function categoryName(rows, id) {
@@ -310,6 +315,109 @@ function firstValue(row, names) {
     if (value) return value;
   }
   return "";
+}
+
+const LINK_NEEDLES = ["профиль", "яндекс", "yandex", "карт", "2гис", "2gis", "maps", "ссылка", "сайт"];
+
+function extractHttpUrls(value) {
+  const texts = [];
+  const visit = (item) => {
+    if (typeof item === "string" || typeof item === "number") {
+      const text = String(item).trim();
+      if (text) texts.push(text);
+      return;
+    }
+    if (Array.isArray(item)) {
+      item.forEach(visit);
+      return;
+    }
+    if (item && typeof item === "object") {
+      for (const key of ["VALUE", "value", "url", "URL", "href", "HREF", "link", "LINK"]) {
+        if (item[key] != null) visit(item[key]);
+      }
+    }
+  };
+  visit(value);
+  const found = [];
+  for (const text of texts) {
+    const matches = text.match(/https?:\/\/[^\s"'<>]+/gi) || [];
+    for (const match of matches) {
+      try {
+        const url = new URL(match.replace(/[),.;]+$/g, ""));
+        if (url.protocol === "http:" || url.protocol === "https:") found.push(url.href);
+      } catch {
+        // A value that is not a URL stays empty.
+      }
+    }
+  }
+  return [...new Set(found)];
+}
+
+function usableProfileUrl(url) {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    if (host.includes("bitrix24") || parsed.pathname.toLowerCase().includes("/rest/")) return false;
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function isMapsUrl(url) {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host.includes("yandex") || host.endsWith("ya.ru") || host.includes("2gis.") || host.endsWith("2gis.ru");
+  } catch {
+    return false;
+  }
+}
+
+function linkEntries(row, definitions) {
+  const known = labeledFields(definitions).filter((entry) => entry.name && entry.name !== "COMMENTS" && entry.name !== "TITLE");
+  const seen = new Set(known.map((entry) => entry.name));
+  const extras = Object.keys(row || {})
+    .filter((name) => name.startsWith("UF_") && !seen.has(name))
+    .map((name) => ({ name, label: "", type: "" }));
+  return [...known, ...extras];
+}
+
+function dealProfileLink(row, definitions) {
+  const ranked = [];
+  for (const entry of linkEntries(row, definitions)) {
+    const labelRank = LINK_NEEDLES.findIndex((needle) => entry.label.includes(needle));
+    const urlType = entry.type === "url";
+    const custom = entry.name.startsWith("UF_");
+    if (labelRank === -1 && !urlType && !custom) continue;
+    const urls = extractHttpUrls(row?.[entry.name]).filter(usableProfileUrl);
+    const maps = urls.find(isMapsUrl) || "";
+    const chosen = maps || ((labelRank !== -1 || urlType) ? urls[0] || "" : "");
+    if (!chosen) continue;
+    const rank = maps ? 0 : (labelRank === -1 ? LINK_NEEDLES.length + 2 : labelRank + 1);
+    ranked.push({ rank, url: chosen });
+  }
+  ranked.sort((left, right) => left.rank - right.rank);
+  return ranked[0]?.url || "";
+}
+
+function dealAddress(row, names) {
+  const labeled = firstValue(row, names);
+  if (labeled) return labeled;
+  for (const [key, value] of Object.entries(row || {})) {
+    if (!key.startsWith("UF_") || !value || typeof value !== "object" || Array.isArray(value)) continue;
+    const text = displayValue(value);
+    if (text && (value.ADDRESS_1 || value.CITY || value.address_1)) return text;
+  }
+  return "";
+}
+
+function linkSelectNames(definitions) {
+  return labeledFields(definitions).filter((entry) => {
+    if (!entry.name || entry.name === "COMMENTS" || entry.name === "TITLE") return false;
+    if (entry.type === "url") return true;
+    if (LINK_NEEDLES.some((needle) => entry.label.includes(needle))) return true;
+    return entry.name.startsWith("UF_") && (entry.type === "string" || entry.type === "");
+  }).map((entry) => entry.name);
 }
 
 function isActiveDeal(row, stageName) {
@@ -518,6 +626,57 @@ function checklistAssignee(point, taskAssignee) {
   return field(chosen?.NAME ?? chosen?.name) || taskAssignee || "";
 }
 
+const PROFILE_GROUP = "настроить профиль по сделке";
+const PROFILE_ITEMS = [
+  "Геолокация и вход",
+  "Шапка профиля",
+  "Оформление (обложка, логотип, карточки товаров)",
+  "Фото по разделам",
+  "Внешние ссылки",
+  "Товары в витрину до 20 шт.",
+  "Новости 5 шт.",
+  "Ответы на отзывы",
+  "QR-код",
+  "Лента сторис",
+  "SEO фото",
+];
+
+function looseTitle(value) {
+  return normalizedTitle(value).replace(/\s+/g, " ").replace(/[«»"()]/g, "");
+}
+
+function titlesMatch(left, right) {
+  const a = looseTitle(left);
+  const b = looseTitle(right);
+  return Boolean(a && b && (a === b || a.includes(b) || b.includes(a)));
+}
+
+export function profileReport(items) {
+  const rows = Array.isArray(items) ? items : [];
+  const groupIds = new Set(rows.filter((item) => looseTitle(item?.title).includes(PROFILE_GROUP)).map((item) => field(item?.id)));
+  const grouped = rows.filter((item) => groupIds.has(field(item?.parentId)));
+  const pool = grouped.length ? grouped : rows.filter((item) => !looseTitle(item?.title).includes(PROFILE_GROUP));
+  return PROFILE_ITEMS.map((title) => {
+    const found = pool.find((item) => titlesMatch(item?.title, title));
+    if (!found) return { title, status: NO_DATA };
+    if (found.state === "closed") {
+      return {
+        title,
+        state: "closed",
+        status: DONE,
+        assignee: found.assignee || NO_DATA,
+        proof: "Пункт закрыт в чек-листе «Настроить профиль по сделке».",
+      };
+    }
+    return {
+      title,
+      state: "open",
+      status: NOT_DONE,
+      assignee: found.assignee || NO_DATA,
+    };
+  });
+}
+
 async function bitrixChecklist(fetchImpl, base, dealId, people) {
   try {
     const listed = await postResult(fetchImpl, endpointFor(base, "tasks.task.list.json"), {
@@ -525,7 +684,7 @@ async function bitrixChecklist(fetchImpl, base, dealId, people) {
       select: ["ID", "TITLE", "RESPONSIBLE_ID"],
     });
     if (!listed.ok) return null;
-    const tasks = taskRows(listed.result).slice(0, 3);
+    const tasks = taskRows(listed.result).slice(0, 8);
     if (!tasks.length) return [];
     const items = [];
     let readFailed = false;
@@ -542,23 +701,23 @@ async function bitrixChecklist(fetchImpl, base, dealId, people) {
         continue;
       }
       for (const point of points.result) {
-        if (items.length >= 40) break;
+        if (items.length >= 80) break;
         const title = field(point?.TITLE ?? point?.title);
         if (!title || title.toLowerCase().includes("/rest/")) continue;
         const parent = field(point?.PARENT_ID ?? point?.parentId);
         const closed = field(point?.IS_COMPLETE ?? point?.isComplete).toUpperCase() === "Y";
         items.push({
+          id: field(point?.ID ?? point?.id),
+          parentId: parent,
           title,
-          root: parent === "0",
+          root: parent === "0" || parent === "",
           state: closed ? "closed" : "open",
           assignee: checklistAssignee(point, taskAssignee) || NO_DATA,
         });
       }
     }
     if (!items.length) return readFailed ? null : [];
-    const leaves = items.filter((item) => !item.root);
-    const shown = leaves.length ? leaves : items;
-    return shown.map(({ title, state, assignee }) => ({ title, state, assignee }));
+    return items;
   } catch {
     return null;
   }
@@ -719,8 +878,14 @@ async function listActiveDeals(fetchImpl, base, categoryId, select) {
   return { ok: true, rows };
 }
 
+async function readDeal(fetchImpl, base, id) {
+  const got = await postResult(fetchImpl, endpointFor(base, "crm.deal.get.json"), { id });
+  if (!got.ok || !got.result || typeof got.result !== "object" || Array.isArray(got.result)) return null;
+  return got.result;
+}
+
 async function findNamedDeals(fetchImpl, base, select) {
-  const filters = [{ "%TITLE": "Раковый двор" }, { TITLE: "%Раковый двор%" }];
+  const filters = [{ "%TITLE": "Раковой" }, { "%TITLE": "Раковый" }, { "%TITLE": "Раков" }];
   for (const filter of filters) {
     const listed = await postResult(fetchImpl, endpointFor(base, DEAL_LIST_METHOD), {
       filter,
@@ -759,7 +924,7 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
       ...catalogFields(catalog.result),
     ];
     const periodField = fieldByLabel(fields, ["период"]);
-    const linkFields = fieldsByNeedles(fields, ["профиль", "яндекс", "карт", "ссылка", "сайт"], ["url"]);
+    const linkFields = fieldsByNeedles(fields, LINK_NEEDLES, ["url"]);
     const addressFields = fieldsByNeedles(fields, ["адрес"], ["address"]);
     const select = [...new Set([
       "ID",
@@ -773,7 +938,7 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
       "CLOSEDATE",
       "COMMENTS",
       periodField,
-      ...linkFields,
+      ...linkSelectNames(fields),
       ...addressFields,
     ].filter(Boolean))];
 
@@ -819,11 +984,15 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
 
     const deals = [];
     for (const item of rows) {
-      const row = item.row;
+      let row = item.row;
       const stageId = field(row?.STAGE_ID);
       const stageName = stages.get(stageId) ?? "";
       const named = isNamedDeal(row?.TITLE);
       if (!named && !isActiveDeal(row, stageName)) continue;
+      if (named) {
+        const full = await readDeal(fetchImpl, base, field(row?.ID));
+        if (full) row = { ...row, ...full };
+      }
       const assigneeId = field(row?.ASSIGNED_BY_ID);
       const proof = isProofClient(row?.TITLE) && (item.funnel === "oformlenie" || named);
       const marks = {};
@@ -849,13 +1018,19 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
       }
       const late = proof ? lateMap(row?.DATE_CREATE, marks, now) : null;
       const stageFit = proof ? stageFitFor(stageName, row?.DATE_CREATE, now) : null;
-      const checklist = proof ? await bitrixChecklist(fetchImpl, base, field(row?.ID), people) : null;
+      const fullList = proof ? await bitrixChecklist(fetchImpl, base, field(row?.ID), people) : null;
+      const leaves = Array.isArray(fullList) ? fullList.filter((point) => !point.root) : fullList;
+      const visible = Array.isArray(leaves) && leaves.length ? leaves : fullList;
+      const checklist = Array.isArray(visible)
+        ? visible.map(({ title, state, assignee }) => ({ title, state, assignee }))
+        : visible;
+      const report = named ? profileReport(Array.isArray(fullList) ? fullList : []) : null;
       deals.push({
         id: field(row?.ID),
         title: organizationName(row?.TITLE),
         period: present(periodText(periodField ? row?.[periodField] : "", row?.BEGINDATE, row?.CLOSEDATE)),
-        link: present(firstValue(row, linkFields)),
-        address: present(firstValue(row, addressFields)),
+        link: present(dealProfileLink(row, fields) || firstValue(row, linkFields)),
+        address: present(dealAddress(row, addressFields)),
         assignee: present(people.get(assigneeId) ?? ""),
         stage: present(stageName),
         funnel: item.funnel,
@@ -863,6 +1038,7 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
         ...(finishBy ? { finishBy } : {}),
         ...(brief ? { brief } : {}),
         ...(proof ? { pilot: true, late, stageFit, checklist, dialog: talk } : {}),
+        ...(report ? { report } : {}),
         marks,
         checks: (proof ? PILOT_CHECKS : STARTER_CHECKS).map((check) => {
           const mark = marks[check.code];
