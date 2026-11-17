@@ -192,11 +192,21 @@ function DealDetail({ section, deal, onBack }) {
       </dl>
       {report ? (
         <>
-          <p className={report.some((item) => item.status === "Не сделано") ? "stuck-banner" : "stuck-banner stuck-clear"}>
-            {report.some((item) => item.status === "Не сделано")
-              ? `Застряло: ${report.filter((item) => item.status === "Не сделано").map((item) => item.title).join(", ")}`
-              : "Застрявших пунктов нет."}
-          </p>
+          {report.some((item) => item.status === "Не сделано") ? (
+            <div className="stuck-banner">
+              <p>Застряло</p>
+              <ul className="stuck-list">
+                {report.filter((item) => item.status === "Не сделано").map((item) => (
+                  <li key={item.title}>{item.say || item.missing || item.title}</li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <p className="stuck-banner stuck-clear">Застрявших пунктов нет.</p>
+          )}
+          {talk.length > 0 ? (
+            <p className="talk-line">{talk.map(([label, value]) => `${label}: ${value}`).join(". ")}.</p>
+          ) : null}
           <div className="table-scroll">
           <table className="work-table">
             <caption>Что страдает по регламенту. Сверка каждый час: сделка, Карты и переписка.</caption>

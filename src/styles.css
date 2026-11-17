@@ -557,6 +557,25 @@ dd {
   font-weight: 500;
 }
 
+.stuck-banner p {
+  margin: 0;
+}
+
+.stuck-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.stuck-list li + li {
+  margin-top: 6px;
+}
+
+.talk-line {
+  margin: 12px 0 0;
+  color: var(--ink);
+  font-size: 14px;
+}
+
 .stuck-clear {
   background: #f4f7f5;
   color: var(--accent);

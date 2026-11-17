@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { acceptanceStatus, loadOformlenieDeals, organizationName, pipelineSection, readDialog, webhookConfigured } from "./bitrix.js";
+import { acceptanceStatus, loadOformlenieDeals, organizationName, parseMapsProfile, pipelineSection, readDialog, webhookConfigured } from "./bitrix.js";
 
 test("missing or blank webhook stays disconnected and does not call Bitrix", async () => {
   assert.equal(webhookConfigured({}), false);
@@ -413,6 +413,42 @@ test("dialog labels do not repeat the chat", () => {
   assert.equal(wazzup.clientTone, "нейтральный");
   assert.equal(wazzup.replies, "отвечает в пределах трёх дней");
   assert.equal(wazzup.managerTone, "Нет данных");
+});
+
+test("a Maps profile page yields the facts it actually contains", () => {
+  const html = `<title>Раковый двор, кафе — Яндекс Карты</title>
+    <script type="application/json" class="state-view">${JSON.stringify({
+      stack: [{ results: { items: [{
+        title: "Раковый двор",
+        fullAddress: "Санкт-Петербург, Набережная, 4",
+        coordinates: [30.3, 59.9],
+        entrances: [{ coordinates: [30.3, 59.9] }],
+        photos: { count: 12, items: [{ alt: "Фасад Раковый двор" }] },
+        businessImages: { logo: { urlTemplate: "https://avatars.mds.yandex.net/logo/%s" } },
+        urls: ["https://example.invalid/site"],
+        hasStories: false,
+        ratingData: { reviewCount: 2 },
+        reviewResults: { reviews: [{ text: "ок" }, { text: "ок", businessComment: { text: "спасибо" } }] },
+      }] } }],
+    })}</script>
+    <a class="tabs-select-view__title" aria-label="Фото, 12"></a>
+    <a class="tabs-select-view__title" aria-label="Отзывы, 2"></a>`;
+  const profile = parseMapsProfile(html);
+  assert.equal(profile.opened, true);
+  assert.equal(profile.profileName, "Раковый двор");
+  assert.equal(profile.addressText, "Санкт-Петербург, Набережная, 4");
+  assert.equal(profile.photos, 12);
+  assert.equal(profile.logo, true);
+  assert.equal(profile.externalLinks, 1);
+  assert.equal(profile.stories, 0);
+  assert.equal(profile.goods, 0);
+  assert.equal(profile.reviews, 2);
+  assert.equal(profile.reviewAnswers, 1);
+  const nested = readDialog(
+    [{ author_id: "0", params: { MESSAGE: "Спасибо, добрый день" }, date: "2026-11-10T12:00:00+03:00" }],
+    new Set(["8"]),
+  );
+  assert.equal(nested.clientTone, "спокойный");
 });
 
 test("a failed read does not surface the endpoint", async () => {

@@ -16,6 +16,13 @@ const types = {
   ".woff2": "font/woff2",
 };
 
+function cacheControl(pathname) {
+  if (pathname.startsWith("/assets/") && /-[A-Za-z0-9_]{6,}\.[a-z0-9]+$/i.test(pathname)) {
+    return "public, max-age=31536000, immutable";
+  }
+  return "no-store";
+}
+
 function filePath(pathname) {
   let decoded = pathname;
   try {
@@ -46,7 +53,10 @@ createServer(async (req, res) => {
     try {
       const data = await readFile(path);
       const type = types[extname(path)] ?? "application/octet-stream";
-      res.writeHead(200, { "content-type": type });
+      res.writeHead(200, {
+        "content-type": type,
+        "cache-control": cacheControl(url.pathname),
+      });
       res.end(data);
       return;
     } catch {
@@ -56,7 +66,10 @@ createServer(async (req, res) => {
 
   try {
     const html = await readFile(join(root, "index.html"));
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+    });
     res.end(html);
   } catch {
     res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
