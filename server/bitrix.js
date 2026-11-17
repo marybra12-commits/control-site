@@ -264,6 +264,12 @@ function isNamedDeal(title) {
   return isRakovDeal(title);
 }
 
+function offerForDeal(title) {
+  const text = normalizedTitle(title);
+  if (text.includes("автосделка") && isRakovDeal(title)) return "/kp-rakovy-dvor.html";
+  return "";
+}
+
 function categoryName(rows, id) {
   const row = (Array.isArray(rows) ? rows : []).find((item) => field(item?.ID) === id);
   return field(row?.NAME);
@@ -503,11 +509,11 @@ function daysAfter(created, now) {
   return Math.round((to - from) / 86400000);
 }
 
-function messageText(row) {
+function messageChunks(row) {
   const chunks = [];
   const take = (item) => {
     if (typeof item === "string" || typeof item === "number") {
-      const text = String(item).trim();
+      const text = String(item).replace(/\s+/g, " ").trim();
       if (text) chunks.push(text);
       return;
     }
@@ -524,7 +530,11 @@ function messageText(row) {
   take(row?.PARAMS);
   take(row?.DESCRIPTION);
   take(row?.PROVIDER_PARAMS);
-  return chunks.join(" ").toLowerCase().replaceAll("ё", "е");
+  return chunks.join(" ").replace(/\s+/g, " ").trim();
+}
+
+function messageText(row) {
+  return messageChunks(row).toLowerCase().replaceAll("ё", "е");
 }
 
 function messageDate(row) {
@@ -984,10 +994,9 @@ function factFor(profile, key) {
   if (!profile) return { state: "unknown", missing: "", proof: "" };
   if (key === "place") {
     const where = profile.addressText ? `: ${profile.addressText}` : "";
-    if (profile.address && profile.coords && profile.entrance) return { state: "yes", missing: "Нет", proof: `На Картах есть адрес и вход${where}.` };
-    if (profile.address && (profile.coords || profile.entrance)) return { state: "no", missing: `Адрес на Картах есть${where}. Вход не отмечен.`, proof: "" };
-    if (profile.address) return { state: "no", missing: `Адрес на Картах есть${where}. Вход не отмечен.`, proof: "" };
-    return { state: "no", missing: "На Картах нет адреса.", proof: "" };
+    if (profile.coords || profile.entrance) return { state: "yes", missing: "Нет", proof: `На Картах есть точка и адрес${where}.` };
+    if (profile.address) return { state: "no", missing: `Адрес на Картах есть${where}. Точки на карте нет.`, proof: "" };
+    return { state: "no", missing: "На Картах нет точки.", proof: "" };
   }
   if (key === "head") {
     if (profile.name) return { state: "yes", missing: "Нет", proof: `На Картах в шапке: ${profile.profileName || "название есть"}.` };
@@ -1000,8 +1009,7 @@ function factFor(profile, key) {
     return { state: "no", missing: "На Картах не видно обложки и логотипа.", proof: "" };
   }
   if (key === "photos") {
-    if (profile.photos > 0 && profile.photoSections) return { state: "yes", missing: "Нет", proof: `На Картах ${profile.photos} фото.` };
-    if (profile.photos > 0) return { state: "no", missing: `На Картах ${profile.photos} фото, разделы не подписаны.`, proof: "" };
+    if (profile.photos > 0) return { state: "yes", missing: "Нет", proof: `На Картах ${profile.photos} фото.` };
     if (profile.photos === 0) return { state: "no", missing: "На Картах нет фото.", proof: "" };
     return { state: "unknown", missing: "", proof: "" };
   }
@@ -1010,9 +1018,8 @@ function factFor(profile, key) {
     return { state: "no", missing: "На Картах нет внешней ссылки.", proof: "" };
   }
   if (key === "goods") {
-    if (profile.goods >= 5 && profile.goods <= 20) return { state: "yes", missing: "Нет", proof: `На Картах ${profile.goods} товаров.` };
+    if (profile.goods > 0) return { state: "yes", missing: "Нет", proof: `На Картах в витрине ${profile.goods} товаров.` };
     if (profile.goods === 0) return { state: "no", missing: "На Картах нет товаров в витрине.", proof: "" };
-    if (profile.goods > 0) return { state: "no", missing: `На Картах ${profile.goods} товаров, нужно от 5 до 20.`, proof: "" };
     return { state: "unknown", missing: "", proof: "" };
   }
   if (key === "news") {
@@ -1291,29 +1298,96 @@ function replyPattern(dates) {
   return "ответы реже раза в неделю";
 }
 
+const TOPIC_LABELS = [
+  ["макет", "макет"],
+  ["бриф", "бриф"],
+  ["фото", "фото"],
+  ["отзыв", "отзывы"],
+  ["сторис", "сторис"],
+  ["новост", "новости"],
+  ["витрин", "витрину"],
+  ["товар", "товары"],
+  ["сайт", "сайт"],
+  ["ссылк", "ссылки"],
+  ["оплат", "оплату"],
+  ["счет", "оплату"],
+  ["счёт", "оплату"],
+  ["кьюар", "QR"],
+  ["qr", "QR"],
+  ["логотип", "оформление"],
+  ["обложк", "оформление"],
+  ["оформлен", "оформление"],
+  ["адрес", "адрес"],
+  ["геолок", "точку на карте"],
+];
+
+function topicLine(turns) {
+  const blob = turns.map((turn) => turn.folded).join(" ");
+  const found = [];
+  for (const [needle, label] of TOPIC_LABELS) {
+    if (blob.includes(needle) && !found.includes(label)) found.push(label);
+  }
+  if (!found.length) return NO_DATA;
+  if (found.length === 1) return `Говорили про ${found[0]}.`;
+  const last = found[found.length - 1];
+  return `Говорили про ${found.slice(0, -1).join(", ")} и ${last}.`;
+}
+
+function askRank(text) {
+  if (text.includes("?")) return 2;
+  if (/(когда|где|как|сколько|почему|зачем|можно|какой|какая|какие|подскажите|пришлите|пришли)/.test(text)) return 2;
+  if (/(жду|нужно|надо)/.test(text)) return 1;
+  return 0;
+}
+
+function unansweredLine(turns) {
+  if (!turns.length) return NO_DATA;
+  let lastManager = -1;
+  turns.forEach((turn, index) => {
+    if (turn.role === "manager") lastManager = index;
+  });
+  const pending = [];
+  for (const turn of turns.slice(lastManager + 1)) {
+    if (turn.role !== "client" || askRank(turn.folded) === 0) continue;
+    if (!pending.includes(turn.plain)) pending.push(turn.plain);
+  }
+  if (!pending.length) return "Неотвеченных вопросов нет.";
+  const line = pending.slice(-2).join(". ");
+  return line.length > 180 ? `${line.slice(0, 177)}…` : line;
+}
+
 export function readDialog(messages, operatorIds) {
   const operators = operatorIds instanceof Set ? operatorIds : new Set();
   const clientDates = [];
   const clientTexts = [];
   const managerTexts = [];
+  const turns = [];
   for (const message of Array.isArray(messages) ? messages : []) {
     const author = messageAuthor(message);
-    const text = messageText(message).trim();
+    const folded = messageText(message).trim();
+    const plain = messageChunks(message).trim();
     const system = field(message?.system ?? message?.SYSTEM).toUpperCase() === "Y";
-    if (system || !text || !author) continue;
+    if (system || !folded || !author || folded.includes("/rest/")) continue;
     const isManager = author !== "0" && (operators.size === 0 || operators.has(author));
+    const when = messageDate(message);
+    turns.push({ role: isManager ? "manager" : "client", folded, plain, date: when, index: turns.length });
     if (isManager) {
-      managerTexts.push(text);
+      managerTexts.push(folded);
       continue;
     }
-    clientTexts.push(text);
-    const when = messageDate(message);
+    clientTexts.push(folded);
     if (when) clientDates.push(when);
   }
+  turns.sort((left, right) => {
+    if (left.date && right.date && left.date !== right.date) return left.date < right.date ? -1 : 1;
+    return left.index - right.index;
+  });
   return {
     clientTone: toneLabel(clientTexts),
     replies: replyPattern(clientDates),
     managerTone: toneLabel(managerTexts),
+    about: topicLine(turns),
+    unanswered: unansweredLine(turns),
   };
 }
 
@@ -1412,7 +1486,7 @@ async function wazzupMessages(fetchImpl, base, dealId, assigneeId) {
     order: { ID: "DESC" },
   });
   const messages = [];
-  for (const activity of activityRows(listed.result).slice(0, 40)) {
+  for (const activity of activityRows(listed.result).slice(0, 100)) {
     const blob = [activity?.PROVIDER_ID, activity?.SUBJECT].map(field).join(" ").toLowerCase();
     if (!blob.includes("wazzup")) continue;
     const text = field(activity?.DESCRIPTION).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
@@ -1432,7 +1506,7 @@ async function lineMessages(fetchImpl, base, line) {
   if (sessionId) {
     const history = await postResult(fetchImpl, endpointFor(base, "imopenlines.session.history.get.json"), {
       SESSION_ID: sessionId,
-      LIMIT: 50,
+      LIMIT: 100,
     });
     const messages = messageList(history.result);
     if (messages.length) return messages;
@@ -1441,7 +1515,7 @@ async function lineMessages(fetchImpl, base, line) {
   if (!chatId) return [];
   const history = await postResult(fetchImpl, endpointFor(base, "im.dialog.messages.get.json"), {
     DIALOG_ID: `chat${chatId}`,
-    LIMIT: 50,
+    LIMIT: 100,
   });
   return messageList(history.result);
 }
@@ -1456,10 +1530,17 @@ async function proofFromDialog(fetchImpl, base, dealId, now, assigneeId, row) {
     const line = await findOpenLine(fetchImpl, base, dealId, row);
     const channel = proven(channelProof(line));
     if (channel) notes.marks["AM-D0-4"] = channel;
-    const messages = [
+    const seen = new Set();
+    const messages = [];
+    for (const message of [
       ...await lineMessages(fetchImpl, base, line),
       ...await wazzupMessages(fetchImpl, base, dealId, assigneeId),
-    ];
+    ]) {
+      const key = `${messageText(message)}|${messageDate(message)}`;
+      if (!messageText(message) || seen.has(key)) continue;
+      seen.add(key);
+      messages.push(message);
+    }
     notes.dialog = readDialog(messages, operatorIdsFrom(line, assigneeId));
     notes.heard = heardFrom(messages);
     let briefAt = "";
@@ -1695,6 +1776,7 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
         ...(finishBy ? { finishBy } : {}),
         ...(brief ? { brief } : {}),
         ...(proof ? { pilot: true, late, stageFit, checklist, dialog: talk } : {}),
+        ...(offerForDeal(row?.TITLE) ? { offer: "/kp-rakovy-dvor.html" } : {}),
         ...(report ? { report } : {}),
         marks,
         checks: (proof ? PILOT_CHECKS : STARTER_CHECKS).map((check) => {

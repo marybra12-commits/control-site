@@ -157,6 +157,12 @@ function DealDetail({ section, deal, onBack }) {
     ["Как отвечает", deal.dialog?.replies],
     ["Тон менеджера", deal.dialog?.managerTone],
   ].filter(([, value]) => value && value !== noData);
+  const dialogRows = [
+    ["О чём говорили", deal.dialog?.about],
+    ["Тон менеджера", deal.dialog?.managerTone],
+    ["Вопрос без ответа", deal.dialog?.unanswered],
+  ].filter(([, value]) => value && value !== noData);
+  const offer = deal.offer === "/kp-rakovy-dvor.html" ? deal.offer : "";
 
   return (
     <article className="card deal">
@@ -190,6 +196,11 @@ function DealDetail({ section, deal, onBack }) {
           </div>
         ) : null}
       </dl>
+      {offer ? (
+        <p className="offer-line">
+          <a className="offer-link" href={offer} download="Коммерческое-предложение-Раковый-двор.html">Скачать коммерческое предложение</a>
+        </p>
+      ) : null}
       {report ? (
         <>
           {report.some((item) => item.status === "Не сделано") ? (
@@ -240,16 +251,22 @@ function DealDetail({ section, deal, onBack }) {
         </>
       ) : null}
       {stageNote && report ? <p className="stage-line">{stageNote}</p> : null}
-      {report && talk.length > 0 ? (
+      {report && (dialogRows.length > 0 || talk.length > 0) ? (
         <section className="panel" aria-label="Переписка">
           <h3>Переписка</h3>
-          <dl className="panel-rows">
-            {talk.map(([label, value]) => (
+          <dl className="panel-rows dialog-rows">
+            {(dialogRows.length > 0 ? dialogRows : talk).map(([label, value]) => (
               <div key={label}>
                 <dt>{label}</dt>
                 <dd>{value}</dd>
               </div>
             ))}
+            {dialogRows.length > 0 ? talk.filter(([label]) => !dialogRows.some(([name]) => name === label)).map(([label, value]) => (
+              <div key={label}>
+                <dt>{label}</dt>
+                <dd>{value}</dd>
+              </div>
+            )) : null}
           </dl>
         </section>
       ) : null}

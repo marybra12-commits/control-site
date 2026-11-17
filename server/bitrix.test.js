@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { acceptanceStatus, loadOformlenieDeals, organizationName, parseMapsProfile, pipelineSection, readDialog, webhookConfigured } from "./bitrix.js";
+import { acceptanceStatus, controlBrief, loadOformlenieDeals, organizationName, parseMapsProfile, pipelineSection, readDialog, webhookConfigured } from "./bitrix.js";
 
 test("missing or blank webhook stays disconnected and does not call Bitrix", async () => {
   assert.equal(webhookConfigured({}), false);
@@ -335,6 +335,8 @@ test("each funnel keeps its active deals and drops a won card", async () => {
     clientTone: "Нет данных",
     replies: "Нет данных",
     managerTone: "Нет данных",
+    about: "Нет данных",
+    unanswered: "Нет данных",
   });
   const rakovy = result.deals.find((deal) => deal.title === "Автосделка Раковой Двор Оформление+3Д");
   assert.equal(rakovy.link, "https://yandex.ru/maps/-/CXSKA-pK");
@@ -350,6 +352,11 @@ test("each funnel keeps its active deals and drops a won card", async () => {
   assert.equal(rakovy.dialog.clientTone, "спокойный");
   assert.equal(rakovy.dialog.replies, "отвечает в пределах трёх дней");
   assert.equal(rakovy.dialog.managerTone, "спокойный");
+  assert.equal(rakovy.dialog.about.includes("оформление"), true);
+  assert.equal(rakovy.dialog.about.includes("макет"), true);
+  assert.equal(rakovy.dialog.unanswered.toLowerCase().includes("жду макет"), true);
+  assert.equal(rakovy.offer, "/kp-rakovy-dvor.html");
+  assert.equal(result.deals.find((deal) => deal.title === "Раковый двор на набережной").offer, undefined);
   assert.equal(rakovy.checklist.find((item) => item.title === "Шапка профиля").state, "closed");
   assert.equal(rakovy.checklist.find((item) => item.title === "Геолокация и вход").state, "open");
   assert.equal(rakovy.checklist.some((item) => item.title === "Настроить профиль по сделке"), false);
@@ -388,7 +395,7 @@ test("each funnel keeps its active deals and drops a won card", async () => {
   assert.equal(rakovy.report.find((item) => item.title === "QR-код").status, "Не сделано");
   assert.equal(rakovy.report.length, 11);
   assert.equal(packed.includes("заполните бриф"), false);
-  assert.equal(packed.includes("жду макет"), false);
+  assert.equal(packed.includes("Пожалуйста, жду макет"), true);
   assert.equal(packed.includes("Смирнова"), true);
 });
 
@@ -415,6 +422,43 @@ test("dialog labels do not repeat the chat", () => {
   assert.equal(wazzup.clientTone, "нейтральный");
   assert.equal(wazzup.replies, "отвечает в пределах трёх дней");
   assert.equal(wazzup.managerTone, "Нет данных");
+});
+
+test("a present point, photos and goods stay done", () => {
+  const rows = controlBrief({
+    maps: {
+      opened: true,
+      address: true,
+      addressText: "Ростов-на-Дону, улица Александра Бондарева, 6",
+      coords: true,
+      entrance: false,
+      name: true,
+      profileName: "Раковый двор",
+      logo: true,
+      photos: 23,
+      photoSections: false,
+      images: 2,
+      externalLinks: 1,
+      goods: 91,
+      posts: 5,
+      stories: 1,
+      reviews: 7,
+      reviewAnswers: 3,
+      sampledReviews: 3,
+      alts: 10,
+      photoAlts: ["Рыба и морепродукты Раковый двор, фото"],
+    },
+    created: "2026-10-01",
+    now: new Date("2026-11-17T12:00:00+03:00"),
+    heard: {},
+    deal: { link: "https://yandex.ru/maps/-/CXSKA-pK" },
+  });
+  const status = (title) => rows.find((item) => item.title === title).status;
+  assert.equal(status("Геолокация и вход"), "Сделано");
+  assert.equal(status("Фото по разделам"), "Сделано");
+  assert.equal(status("Товары в витрине"), "Сделано");
+  assert.equal(status("SEO фото"), "Не сделано");
+  assert.equal(rows.find((item) => item.title === "Геолокация и вход").proof.includes("точка"), true);
 });
 
 test("a Maps profile page yields the facts it actually contains", () => {
