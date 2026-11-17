@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { disconnectedLine, emptyState, noData, reviewClients, reviewGap, sections } from "./content.js";
+import { adsNote, disconnectedLine, emptyState, noData, reviewClients, reviewGap, sections } from "./content.js";
 
 function sectionFromHash() {
   const id = window.location.hash.replace(/^#/, "").split("/")[0];
@@ -31,10 +31,9 @@ function dealKey(deal, index) {
 }
 
 function dealsForSection(section, deals) {
-  if (!section.funnel) return deals;
-  const matched = deals.filter((deal) => deal.funnel === section.funnel);
-  const classified = deals.some((deal) => deal.funnel === "oformlenie" || deal.funnel === "podderzhka");
-  return classified ? matched : deals;
+  if (section.id === "reklama" || section.id === "otzyvy") return [];
+  if (section.funnel) return deals.filter((deal) => deal.funnel === section.funnel);
+  return deals;
 }
 
 function knownLink(deals, organization) {
@@ -263,7 +262,11 @@ export default function App() {
             <p className="line">{section.line}</p>
           </header>
 
-          {showReviews ? (
+          {section.id === "reklama" ? (
+            <section className="card empty-card">
+              <p>{adsNote}</p>
+            </section>
+          ) : showReviews ? (
             <ReviewsTable deals={bitrix.deals} />
           ) : showDetail ? (
             <DealDetail section={section} deal={openDeal} onBack={() => setOpenDealId(null)} />

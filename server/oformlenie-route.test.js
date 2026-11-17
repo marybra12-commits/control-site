@@ -30,12 +30,27 @@ test("published routes stay disconnected when the runtime env is blank", async (
 test("root handler reads the runtime env and returns deal titles only", async () => {
   const original = globalThis.fetch;
   let called = false;
-  globalThis.fetch = async () => {
+  globalThis.fetch = async (url) => {
     called = true;
+    const method = String(url).split("/").pop();
+    const payloads = {
+      "crm.dealcategory.list.json": [{ ID: "4", NAME: "Оформление" }],
+      "crm.deal.list.json": [{
+        ID: "3",
+        TITLE: "Карточка",
+        CATEGORY_ID: "4",
+        STAGE_ID: "C4:NEW",
+        STAGE_SEMANTIC_ID: "P",
+        ASSIGNED_BY_ID: "9",
+      }],
+      "crm.status.list.json": [
+        { ENTITY_ID: "DEAL_STAGE_4", STATUS_ID: "C4:NEW", NAME: "Новая" },
+      ],
+    };
     return {
       ok: true,
       async json() {
-        return { result: [{ ID: "3", TITLE: "Карточка", STAGE_ID: "NEW", ASSIGNED_BY_ID: "9" }] };
+        return { result: payloads[method] ?? [] };
       },
     };
   };

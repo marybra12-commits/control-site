@@ -21,6 +21,8 @@ export const reviewClients = [
 
 export const reviewGap = "Остальные клиенты переписки: нет данных.";
 
+export const adsNote = "Пока не подключено. Объявления появятся из Яндекс Бизнеса.";
+
 export const sections = [
   {
     id: "podderzhka",
