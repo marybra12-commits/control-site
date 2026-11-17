@@ -236,9 +236,30 @@ export function pipelineSection(name) {
   return PIPELINES.get(text) || "";
 }
 
+function normalizedTitle(title) {
+  return field(title).toLowerCase().replaceAll("ё", "е");
+}
+
 function isProofClient(title) {
-  const text = field(title).toLowerCase().replaceAll("ё", "е");
+  const text = normalizedTitle(title);
   return text.includes("островок надежды магазин продуктов") || text.includes("раковый двор");
+}
+
+function isNamedDeal(title) {
+  return normalizedTitle(title).includes("раковый двор");
+}
+
+function categoryName(rows, id) {
+  const row = (Array.isArray(rows) ? rows : []).find((item) => field(item?.ID) === id);
+  return field(row?.NAME);
+}
+
+function funnelForCategory(name) {
+  const exact = pipelineSection(name);
+  if (exact) return exact;
+  const text = normalizedTitle(name);
+  if (text.includes("поддерж")) return "podderzhka";
+  return "oformlenie";
 }
 
 function pipelinesFromCategories(result) {
@@ -698,6 +719,21 @@ async function listActiveDeals(fetchImpl, base, categoryId, select) {
   return { ok: true, rows };
 }
 
+async function findNamedDeals(fetchImpl, base, select) {
+  const filters = [{ "%TITLE": "Раковый двор" }, { TITLE: "%Раковый двор%" }];
+  for (const filter of filters) {
+    const listed = await postResult(fetchImpl, endpointFor(base, DEAL_LIST_METHOD), {
+      filter,
+      select,
+      order: { DATE_CREATE: "DESC" },
+    });
+    if (!listed.ok || !Array.isArray(listed.result)) continue;
+    const found = listed.result.filter((row) => isNamedDeal(row?.TITLE));
+    if (found.length) return found;
+  }
+  return [];
+}
+
 export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch, now = new Date()) {
   if (!webhookConfigured(env)) {
     return { connected: false, deals: [] };
@@ -750,13 +786,25 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
     }
 
     const rows = [];
+    const seen = new Set();
     for (const page of listed) {
       if (!page.ok) continue;
       for (const row of page.rows) {
         const categoryId = field(row?.CATEGORY_ID) || page.pipeline.id;
         if (categoryId !== page.pipeline.id) continue;
-        rows.push({ row, funnel: page.pipeline.section });
+        const id = field(row?.ID);
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        rows.push({ row, funnel: page.pipeline.section, pipeline: categoryName(categoryRows, categoryId) });
       }
+    }
+    for (const row of await findNamedDeals(fetchImpl, base, select)) {
+      const id = field(row?.ID);
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      const categoryId = field(row?.CATEGORY_ID);
+      const pipeline = categoryName(categoryRows, categoryId);
+      rows.push({ row, funnel: funnelForCategory(pipeline), pipeline });
     }
 
     const assigneeIds = [...new Set(rows.map((item) => field(item.row?.ASSIGNED_BY_ID)).filter(Boolean))];
@@ -774,9 +822,10 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
       const row = item.row;
       const stageId = field(row?.STAGE_ID);
       const stageName = stages.get(stageId) ?? "";
-      if (!isActiveDeal(row, stageName)) continue;
+      const named = isNamedDeal(row?.TITLE);
+      if (!named && !isActiveDeal(row, stageName)) continue;
       const assigneeId = field(row?.ASSIGNED_BY_ID);
-      const proof = item.funnel === "oformlenie" && isProofClient(row?.TITLE);
+      const proof = isProofClient(row?.TITLE) && (item.funnel === "oformlenie" || named);
       const marks = {};
       let brief = "";
       let finishBy = "";
@@ -810,6 +859,7 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
         assignee: present(people.get(assigneeId) ?? ""),
         stage: present(stageName),
         funnel: item.funnel,
+        ...(item.pipeline ? { pipeline: item.pipeline } : {}),
         ...(finishBy ? { finishBy } : {}),
         ...(brief ? { brief } : {}),
         ...(proof ? { pilot: true, late, stageFit, checklist, dialog: talk } : {}),

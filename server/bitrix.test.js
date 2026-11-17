@@ -96,8 +96,20 @@ test("each funnel keeps its active deals and drops a won card", async () => {
       };
       let resultRows = payloads[method] ?? [];
       if (method === "crm.deal.list.json") {
-        const category = String(body.filter?.CATEGORY_ID ?? "");
-        if (category === "2") {
+        const titleFilter = body.filter?.["%TITLE"] || body.filter?.TITLE || "";
+        if (titleFilter) {
+          resultRows = [{
+            ID: 44,
+            TITLE: "Раковый двор на набережной",
+            CATEGORY_ID: "9",
+            STAGE_ID: "C9:WON",
+            STAGE_SEMANTIC_ID: "S",
+            ASSIGNED_BY_ID: 4,
+            DATE_CREATE: "2026-08-01T10:00:00+03:00",
+          }];
+        } else {
+          const category = String(body.filter?.CATEGORY_ID ?? "");
+          if (category === "2") {
           resultRows = [
             {
               ID: 7,
@@ -161,8 +173,9 @@ test("each funnel keeps its active deals and drops a won card", async () => {
               ASSIGNED_BY_ID: 4,
             },
           ];
-        } else {
-          resultRows = [];
+          } else {
+            resultRows = [];
+          }
         }
       }
       if (method === "imopenlines.crm.chat.get.json" && String(body.CRM_ENTITY) === "21") {
@@ -225,6 +238,7 @@ test("each funnel keeps its active deals and drops a won card", async () => {
   assert.deepEqual(result.deals.map((deal) => deal.title), [
     "Островок надежды магазин продуктов",
     "Раковый двор",
+    "Раковый двор на набережной",
     "ИП Иванова Анна",
     "Кафе Волна",
   ]);
@@ -268,6 +282,14 @@ test("each funnel keeps its active deals and drops a won card", async () => {
   assert.equal(rakovy.dialog.managerTone, "спокойный");
   assert.equal(rakovy.checklist[0].state, "closed");
   assert.equal(rakovy.checklist[1].state, "open");
+  const shore = result.deals.find((deal) => deal.title === "Раковый двор на набережной");
+  assert.equal(shore.funnel, "oformlenie");
+  assert.equal(shore.pipeline, "Продажи");
+  assert.equal(shore.pilot, true);
+  assert.ok(calls.some((call) => {
+    if (!String(call.url).endsWith("/crm.deal.list.json")) return false;
+    return JSON.parse(call.options.body).filter["%TITLE"] === "Раковый двор";
+  }));
   const ivanova = result.deals.find((deal) => deal.title === "ИП Иванова Анна");
   assert.equal(ivanova.pilot, undefined);
   assert.equal(ivanova.late, undefined);

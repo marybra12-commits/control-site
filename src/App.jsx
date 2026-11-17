@@ -165,6 +165,12 @@ function DealDetail({ section, deal, onBack }) {
           <dt>Стадия</dt>
           <dd>{deal.stage || noData}</dd>
         </div>
+        {deal.pipeline ? (
+          <div>
+            <dt>Воронка</dt>
+            <dd>{deal.pipeline}</dd>
+          </div>
+        ) : null}
       </dl>
       {deal.pilot ? (
         <section className="bitrix-work" aria-label="Назначение в Битриксе">
