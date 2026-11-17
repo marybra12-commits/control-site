@@ -183,19 +183,23 @@ function endpointFor(base, method) {
 }
 
 async function postResult(fetchImpl, endpoint, body) {
-  const response = await fetchImpl(endpoint, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(15000),
-  });
-  if (!response.ok) return { ok: false, result: null };
-  const payload = await response.json();
-  if (!payload || typeof payload !== "object" || payload.error) return { ok: false, result: null };
-  return { ok: true, result: payload.result ?? null, next: payload.next };
+  try {
+    const response = await fetchImpl(endpoint, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!response?.ok) return { ok: false, result: null };
+    const payload = typeof response.json === "function" ? await response.json() : null;
+    if (!payload || typeof payload !== "object" || payload.error) return { ok: false, result: null };
+    return { ok: true, result: payload.result ?? null, next: payload.next };
+  } catch {
+    return { ok: false, result: null };
+  }
 }
 
 function stageNames(result) {
@@ -946,28 +950,13 @@ function allowedMapsUrl(value) {
   }
 }
 
-function pricesUrl(pageUrl) {
-  try {
-    const url = new URL(pageUrl);
-    if (!allowedMapsUrl(url.href)) return "";
-    const match = url.pathname.match(/\/maps\/org\/[^/]+\/\d+/);
-    if (!match) return "";
-    url.pathname = `${match[0]}/prices/`;
-    url.search = "";
-    url.hash = "";
-    return url.href;
-  } catch {
-    return "";
-  }
-}
-
 async function fetchMapsHtml(fetchImpl, link) {
   if (!allowedMapsUrl(link)) return null;
   try {
     const response = await fetchImpl(link, {
       method: "GET",
       headers: { Accept: "text/html", "User-Agent": "Mozilla/5.0" },
-      signal: AbortSignal.timeout(12000),
+      signal: AbortSignal.timeout(8000),
     });
     if (!response?.ok || (response.url && !allowedMapsUrl(response.url))) return null;
     const html = typeof response.text === "function" ? await response.text() : "";
@@ -982,15 +971,6 @@ async function readMapsProfile(fetchImpl, link) {
   const page = await fetchMapsHtml(fetchImpl, link);
   if (!page) return null;
   const profile = parseMapsProfile(page.html);
-  const prices = pricesUrl(page.finalUrl);
-  if (prices && profile.goods == null) {
-    const extra = await fetchMapsHtml(fetchImpl, prices);
-    if (extra) {
-      const priced = parseMapsProfile(extra.html);
-      if (priced.goods != null) profile.goods = priced.goods;
-      if (priced.externalLinks > profile.externalLinks) profile.externalLinks = priced.externalLinks;
-    }
-  }
   return profile.opened ? profile : null;
 }
 
@@ -1436,19 +1416,12 @@ function paramsOf(row) {
   return params && typeof params === "object" ? params : {};
 }
 
-async function findOpenLine(fetchImpl, base, dealId, row) {
-  const attempts = [
-    { CRM_ENTITY_TYPE: "deal", CRM_ENTITY: dealId },
-    { CRM_ENTITY_TYPE: "DEAL", CRM_ENTITY: dealId },
-  ];
-  const contact = field(row?.CONTACT_ID);
-  const company = field(row?.COMPANY_ID);
-  if (contact) attempts.push({ CRM_ENTITY_TYPE: "contact", CRM_ENTITY: contact });
-  if (company) attempts.push({ CRM_ENTITY_TYPE: "company", CRM_ENTITY: company });
-  for (const body of attempts) {
-    const chat = await postResult(fetchImpl, endpointFor(base, "imopenlines.crm.chat.get.json"), body);
-    if (chatIdFrom(chat.result) || sessionIdFrom(chat.result)) return chat.result;
-  }
+async function findOpenLine(fetchImpl, base, dealId) {
+  const chat = await postResult(fetchImpl, endpointFor(base, "imopenlines.crm.chat.get.json"), {
+    CRM_ENTITY_TYPE: "deal",
+    CRM_ENTITY: dealId,
+  });
+  if (chatIdFrom(chat.result) || sessionIdFrom(chat.result)) return chat.result;
   const listed = await postResult(fetchImpl, endpointFor(base, "crm.activity.list.json"), {
     filter: { OWNER_TYPE_ID: 2, OWNER_ID: dealId, PROVIDER_ID: "IMOPENLINES_SESSION" },
     select: ["ID", "ASSOCIATED_ENTITY_ID", "PROVIDER_PARAMS", "PROVIDER_DATA"],
@@ -1635,12 +1608,16 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
   const base = env[WEBHOOK_ENV].trim();
 
   try {
-    const [definitions, catalog, categories, defaultCategory] = await Promise.all([
+    const started = Date.now();
+    const [definitions, catalog, categoriesFirst, defaultCategory] = await Promise.all([
       postResult(fetchImpl, endpointFor(base, "crm.deal.userfield.list.json"), {}),
       postResult(fetchImpl, endpointFor(base, "crm.deal.fields.json"), {}),
       postResult(fetchImpl, endpointFor(base, "crm.dealcategory.list.json"), {}),
       postResult(fetchImpl, endpointFor(base, "crm.dealcategory.default.get.json"), {}),
     ]);
+    const categories = categoriesFirst.ok
+      ? categoriesFirst
+      : await postResult(fetchImpl, endpointFor(base, "crm.dealcategory.list.json"), {});
     if (!categories.ok) return { connected: false, unavailable: true, deals: [] };
 
     const categoryRows = Array.isArray(categories.result) ? [...categories.result] : [];
@@ -1672,13 +1649,15 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
       ...addressFields,
     ].filter(Boolean))];
 
+    const shortSelect = [
+      "ID", "TITLE", "CATEGORY_ID", "STAGE_ID", "STAGE_SEMANTIC_ID", "ASSIGNED_BY_ID",
+      "CONTACT_ID", "COMPANY_ID", "DATE_CREATE", "BEGINDATE", "CLOSEDATE", "COMMENTS",
+    ];
     const listed = await Promise.all(pipelines.map(async (pipeline) => {
-      const page = await listActiveDeals(fetchImpl, base, pipeline.id, select);
+      let page = await listActiveDeals(fetchImpl, base, pipeline.id, select);
+      if (!page.ok) page = await listActiveDeals(fetchImpl, base, pipeline.id, shortSelect);
       return { pipeline, ...page };
     }));
-    if (pipelines.length > 0 && listed.every((page) => !page.ok)) {
-      return { connected: false, unavailable: true, deals: [] };
-    }
 
     const rows = [];
     const seen = new Set();
@@ -1693,7 +1672,12 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
         rows.push({ row, funnel: page.pipeline.section, pipeline: categoryName(categoryRows, categoryId) });
       }
     }
-    for (const row of await findNamedDeals(fetchImpl, base, select)) {
+    const namedRows = await findNamedDeals(fetchImpl, base, select);
+    const namedFallback = namedRows.length ? namedRows : await findNamedDeals(fetchImpl, base, shortSelect);
+    if (pipelines.length > 0 && listed.every((page) => !page.ok) && !namedFallback.length) {
+      return { connected: false, unavailable: true, deals: [] };
+    }
+    for (const row of namedFallback) {
       const id = field(row?.ID);
       if (!id || seen.has(id)) continue;
       seen.add(id);
@@ -1712,8 +1696,16 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
     const stages = stageNames(statuses.result);
     const people = usersById(users.result);
 
-    const deals = [];
-    for (const item of rows) {
+    const built = new Map();
+    const rank = (title) => {
+      if (offerForDeal(title)) return 0;
+      if (isNamedDeal(title)) return 1;
+      if (isProofClient(title)) return 2;
+      return 3;
+    };
+    const ordered = [...rows].sort((left, right) => rank(left.row?.TITLE) - rank(right.row?.TITLE));
+    for (const item of ordered) {
+    try {
       let row = item.row;
       const stageId = field(row?.STAGE_ID);
       const stageName = stages.get(stageId) ?? "";
@@ -1730,7 +1722,8 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
       let finishBy = "";
       let talk = null;
       let heard = null;
-      if (proof) {
+      const heavy = Date.now() - started < 18000;
+      if (proof && heavy) {
         finishBy = finishByText(row?.DATE_CREATE);
         const stageIsNew = field(stageName).toLowerCase() === "новая" || field(stageName).toLowerCase() === "новый";
         const person = people.get(assigneeId) ?? "";
@@ -1750,14 +1743,14 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
       }
       const late = proof ? lateMap(row?.DATE_CREATE, marks, now) : null;
       const stageFit = proof ? stageFitFor(stageName, row?.DATE_CREATE, now) : null;
-      const fullList = proof ? await bitrixChecklist(fetchImpl, base, field(row?.ID), people) : null;
+      const fullList = proof && heavy ? await bitrixChecklist(fetchImpl, base, field(row?.ID), people) : null;
       const leaves = Array.isArray(fullList) ? fullList.filter((point) => !point.root) : fullList;
       const visible = Array.isArray(leaves) && leaves.length ? leaves : fullList;
       const checklist = Array.isArray(visible)
         ? visible.map(({ title, state, assignee }) => ({ title, state, assignee }))
         : visible;
       const profileLink = mapsLinkForDeal(row?.TITLE, dealProfileLink(row, fields) || firstValue(row, linkFields));
-      const maps = named ? await readMapsProfile(fetchImpl, profileLink) : null;
+      const maps = named && heavy ? await readMapsProfile(fetchImpl, profileLink) : null;
       const site = named ? dealSite(row, fields, profileLink) : "";
       const address = dealAddress(row, addressFields) || maps?.addressText || "";
       const report = named ? controlBrief({
@@ -1768,7 +1761,7 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
         replies: talk?.replies,
         deal: { address, site, link: profileLink, assignee: people.get(assigneeId) || "" },
       }) : null;
-      deals.push({
+      built.set(field(row?.ID), {
         id: field(row?.ID),
         title: organizationName(row?.TITLE),
         period: present(periodText(periodField ? row?.[periodField] : "", row?.BEGINDATE, row?.CLOSEDATE)),
@@ -1797,6 +1790,27 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
           };
         }),
       });
+    } catch {
+      const title = organizationName(item.row?.TITLE);
+      if (!title) continue;
+      built.set(field(item.row?.ID), {
+        id: field(item.row?.ID),
+        title,
+        period: NO_DATA,
+        link: present(mapsLinkForDeal(item.row?.TITLE, "")),
+        address: NO_DATA,
+        assignee: NO_DATA,
+        stage: NO_DATA,
+        funnel: item.funnel,
+        ...(item.pipeline ? { pipeline: item.pipeline } : {}),
+        ...(offerForDeal(item.row?.TITLE) ? { offer: "/kp-rakovy-dvor.html" } : {}),
+      });
+    }
+    }
+    const deals = [];
+    for (const item of rows) {
+      const deal = built.get(field(item.row?.ID));
+      if (deal && !deals.some((existing) => existing.id === deal.id)) deals.push(deal);
     }
     deals.sort((left, right) => Number(isProofClient(right.title)) - Number(isProofClient(left.title)));
     return { connected: true, deals };

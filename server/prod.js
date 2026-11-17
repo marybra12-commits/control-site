@@ -3,6 +3,15 @@ import { readFile } from "node:fs/promises";
 import { extname, join, normalize, sep } from "node:path";
 import { GET } from "./deals-handler.js";
 
+function publishedWebhook() {
+  try {
+    const value = process.env.BITRIX_WEBHOOK_URL;
+    return typeof value === "string" ? value : "";
+  } catch {
+    return "";
+  }
+}
+
 const port = Number(process.env.PORT) || 4173;
 const root = join(process.cwd(), "dist");
 const types = {
@@ -39,7 +48,7 @@ function filePath(pathname) {
 createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   if (url.pathname === "/api/oformlenie") {
-    const response = await GET(req, { env: process.env });
+    const response = await GET(req, { env: process.env }, publishedWebhook());
     res.writeHead(response.status, {
       "content-type": "application/json; charset=utf-8",
       "cache-control": "no-store",

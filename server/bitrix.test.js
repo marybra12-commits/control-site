@@ -522,6 +522,45 @@ test("a Maps profile page yields the facts it actually contains", () => {
   assert.equal(nested.clientTone, "спокойный");
 });
 
+test("a later Bitrix failure still returns the named deal", async () => {
+  const result = await loadOformlenieDeals(
+    { BITRIX_WEBHOOK_URL: "https://example.invalid/rest/1/placeholder" },
+    async (url) => {
+      const method = String(url).split("/").pop();
+      if (method === "crm.dealcategory.list.json") {
+        return { ok: true, async json() { return { result: [{ ID: "2", NAME: "Оформление ЯКарты/Аналитика" }] }; } };
+      }
+      if (method === "crm.deal.list.json") {
+        return {
+          ok: true,
+          async json() {
+            return {
+              result: [{
+                ID: "31",
+                TITLE: "Автосделка Раковой Двор Оформление+3Д",
+                CATEGORY_ID: "2",
+                STAGE_ID: "C2:PREPARATION",
+                STAGE_SEMANTIC_ID: "P",
+                ASSIGNED_BY_ID: "8",
+                DATE_CREATE: "2026-11-10T10:00:00+03:00",
+              }],
+            };
+          },
+        };
+      }
+      if (String(url).startsWith("https://yandex.ru/maps/")) {
+        throw new Error("maps down");
+      }
+      throw new Error("later call down");
+    },
+  );
+  assert.equal(result.connected, true);
+  assert.equal(result.unavailable, undefined);
+  const deal = result.deals.find((item) => item.title === "Автосделка Раковой Двор Оформление+3Д");
+  assert.equal(deal.link, "https://yandex.ru/maps/-/CXSKA-pK");
+  assert.equal(JSON.stringify(result).includes("example.invalid"), false);
+});
+
 test("a failed read does not surface the endpoint", async () => {
   const result = await loadOformlenieDeals(
     { BITRIX_WEBHOOK_URL: "https://example.invalid/rest/1/placeholder/" },
