@@ -237,7 +237,8 @@ export function pipelineSection(name) {
 }
 
 function isProofClient(title) {
-  return field(title).toLowerCase().replaceAll("ё", "е").includes("островок надежды магазин продуктов");
+  const text = field(title).toLowerCase().replaceAll("ё", "е");
+  return text.includes("островок надежды магазин продуктов") || text.includes("раковый двор");
 }
 
 function pipelinesFromCategories(result) {
@@ -409,8 +410,221 @@ function proven(proof, image = "") {
   return { proof: text, image: shot };
 }
 
-async function proofFromDialog(fetchImpl, base, dealId, now) {
-  const notes = { brief: NO_DATA, marks: {} };
+const STEP_DUE_DAY = {
+  "PM-1": 0,
+  "AM-D0-1": 0,
+  "AM-D0-2": 0,
+  "AM-D0-3": 0,
+  "AM-D0-4": 0,
+  "AM-W1-1": 6,
+  "AM-W1-2": 6,
+  "AM-W1-3": 6,
+  "AM-W1-4": 6,
+  "AM-W1-5": 6,
+  "AM-W2-1": 13,
+  "AM-W2-2": 13,
+  "AM-W2-3": 13,
+  "AM-W3-1": 20,
+  "AM-W3-2": 20,
+  "AM-W3-3": 20,
+  "AM-W3-4": 20,
+  "PM-4": 29,
+  "PM-5": 29,
+  "PM-6": 29,
+  "PM-7": 29,
+  "PM-8": 29,
+  "PM-9": 29,
+  "AM-W4-2": 29,
+  "AM-W4-3": 29,
+};
+
+function dayZeroKey(created) {
+  const deadline = dayZeroDeadline(created);
+  return deadline ? moscowParts(deadline).key : "";
+}
+
+function hasProof(mark) {
+  return Boolean(field(mark?.proof) || publicImage(mark?.image));
+}
+
+export function lateMap(created, marks, now) {
+  const start = dayZeroKey(created);
+  if (!start) return {};
+  const late = {};
+  for (const [code, offset] of Object.entries(STEP_DUE_DAY)) {
+    if (hasProof(marks?.[code])) continue;
+    const dueKey = addDays(start, offset);
+    if (now > atMoscowHour(dueKey, 18)) late[code] = formatDay(dueKey);
+  }
+  return late;
+}
+
+export function stageFitFor(stageName, created, now) {
+  const stage = field(stageName);
+  const start = dayZeroKey(created);
+  const lowered = stage.toLowerCase().replaceAll("ё", "е");
+  const isNew = !stage || lowered === "новая" || lowered === "новый";
+  const isReview = lowered.includes("провер");
+  const isFinish = /окончан|соглас|сдан|заверш/.test(lowered);
+  if (!start) return { state: stage ? "wrong" : "missing", stage, expected: "взято в работу" };
+  const pastStart = now > atMoscowHour(start, 18);
+  const pastReview = now > atMoscowHour(addDays(start, 20), 18);
+  const pastFinish = now > atMoscowHour(addDays(start, 29), 18);
+  if (!pastStart) return { state: stage ? "right" : "missing", stage, expected: "взято в работу" };
+  if (!pastReview) {
+    if (isNew) return { state: stage ? "wrong" : "missing", stage, expected: "взято в работу" };
+    return { state: "right", stage, expected: "взято в работу" };
+  }
+  if (!pastFinish) {
+    if (isReview || isFinish) return { state: "right", stage, expected: "на проверке" };
+    return { state: stage ? "wrong" : "missing", stage, expected: "на проверке" };
+  }
+  if (isFinish) return { state: "right", stage, expected: "окончание" };
+  return { state: stage ? "wrong" : "missing", stage, expected: "окончание" };
+}
+
+function taskRows(result) {
+  const tasks = result?.tasks ?? result?.items ?? result;
+  if (Array.isArray(tasks)) return tasks;
+  if (tasks && typeof tasks === "object") return Object.values(tasks);
+  return [];
+}
+
+function checklistAssignee(point, taskAssignee) {
+  const members = point?.MEMBERS ?? point?.members;
+  const rows = Array.isArray(members) ? members : [];
+  const chosen = rows.find((member) => field(member?.TYPE ?? member?.type).toUpperCase() === "A") || rows[0];
+  return field(chosen?.NAME ?? chosen?.name) || taskAssignee || "";
+}
+
+async function bitrixChecklist(fetchImpl, base, dealId, people) {
+  try {
+    const listed = await postResult(fetchImpl, endpointFor(base, "tasks.task.list.json"), {
+      filter: { UF_CRM_TASK: `D_${dealId}` },
+      select: ["ID", "TITLE", "RESPONSIBLE_ID"],
+    });
+    if (!listed.ok) return null;
+    const tasks = taskRows(listed.result).slice(0, 3);
+    if (!tasks.length) return [];
+    const items = [];
+    let readFailed = false;
+    for (const task of tasks) {
+      const taskId = field(task?.id ?? task?.ID);
+      if (!taskId) continue;
+      const taskAssignee = people.get(field(task?.responsibleId ?? task?.RESPONSIBLE_ID)) || "";
+      const points = await postResult(fetchImpl, endpointFor(base, "task.checklistitem.getlist.json"), {
+        TASKID: Number(taskId) || taskId,
+        ORDER: { SORT_INDEX: "asc" },
+      });
+      if (!points.ok || !Array.isArray(points.result)) {
+        readFailed = true;
+        continue;
+      }
+      for (const point of points.result) {
+        if (items.length >= 40) break;
+        const title = field(point?.TITLE ?? point?.title);
+        if (!title || title.toLowerCase().includes("/rest/")) continue;
+        const parent = field(point?.PARENT_ID ?? point?.parentId);
+        const closed = field(point?.IS_COMPLETE ?? point?.isComplete).toUpperCase() === "Y";
+        items.push({
+          title,
+          root: parent === "0",
+          state: closed ? "closed" : "open",
+          assignee: checklistAssignee(point, taskAssignee) || NO_DATA,
+        });
+      }
+    }
+    if (!items.length) return readFailed ? null : [];
+    const leaves = items.filter((item) => !item.root);
+    const shown = leaves.length ? leaves : items;
+    return shown.map(({ title, state, assignee }) => ({ title, state, assignee }));
+  } catch {
+    return null;
+  }
+}
+
+const RUDE = ["дурак", "идиот", "ужасн", "бесите", "обман", "хам", "позор", "верните деньги"];
+const CALM = ["спасибо", "благодар", "пожалуйста", "добрый день", "добрый вечер", "здравствуйте"];
+
+function toneLabel(texts) {
+  if (!texts.length) return NO_DATA;
+  const blob = texts.join(" ");
+  if (RUDE.some((word) => blob.includes(word))) return "резкий";
+  if (CALM.some((word) => blob.includes(word))) return "спокойный";
+  return NO_DATA;
+}
+
+function dayGap(fromKey, toKey) {
+  const from = atMoscowHour(fromKey, 12).getTime();
+  const to = atMoscowHour(toKey, 12).getTime();
+  return Math.round((to - from) / 86400000);
+}
+
+function replyPattern(dates) {
+  const keys = [...new Set(dates.map((value) => dayKey(value)).filter(Boolean))].sort();
+  if (!keys.length) return NO_DATA;
+  if (keys.length === 1) return "одно сообщение клиента, регулярность не видна";
+  let max = 0;
+  for (let index = 1; index < keys.length; index += 1) {
+    max = Math.max(max, dayGap(keys[index - 1], keys[index]));
+  }
+  if (max <= 3) return "отвечает в пределах трёх дней";
+  if (max <= 7) return `пауза между ответами до ${max} дней`;
+  return "ответы реже раза в неделю";
+}
+
+export function readDialog(messages, operatorIds) {
+  const empty = { clientTone: NO_DATA, replies: NO_DATA, managerTone: NO_DATA };
+  if (!operatorIds || operatorIds.size === 0) return empty;
+  const clientDates = [];
+  const clientTexts = [];
+  const managerTexts = [];
+  for (const message of messages) {
+    const author = field(message?.author_id ?? message?.authorId ?? message?.AUTHOR_ID);
+    if (!author || author === "0") continue;
+    const text = messageText(message);
+    if (operatorIds.has(author)) {
+      if (text) managerTexts.push(text);
+      continue;
+    }
+    if (text) clientTexts.push(text);
+    const when = messageDate(message);
+    if (when) clientDates.push(when);
+  }
+  return {
+    clientTone: toneLabel(clientTexts),
+    replies: replyPattern(clientDates),
+    managerTone: toneLabel(managerTexts),
+  };
+}
+
+function operatorIdsFrom(result, assigneeId) {
+  const ids = new Set();
+  const assignee = field(assigneeId);
+  if (assignee) ids.add(assignee);
+  const rows = Array.isArray(result) ? result : result && typeof result === "object" ? [result] : [];
+  for (const row of rows) {
+    const single = field(row?.OPERATOR_ID || row?.operatorId);
+    if (single) ids.add(single);
+    const lists = [row?.OPERATORS, row?.operators];
+    for (const list of lists) {
+      if (!Array.isArray(list)) continue;
+      for (const item of list) {
+        const id = field(item?.ID ?? item?.id ?? item);
+        if (id) ids.add(id);
+      }
+    }
+  }
+  ids.delete("");
+  return ids;
+}
+
+async function proofFromDialog(fetchImpl, base, dealId, now, assigneeId) {
+  const notes = {
+    brief: NO_DATA,
+    marks: {},
+    dialog: { clientTone: NO_DATA, replies: NO_DATA, managerTone: NO_DATA },
+  };
   try {
     const chat = await postResult(fetchImpl, endpointFor(base, "imopenlines.crm.chat.get.json"), {
       CRM_ENTITY_TYPE: "DEAL",
@@ -424,9 +638,11 @@ async function proofFromDialog(fetchImpl, base, dealId, now) {
       DIALOG_ID: `chat${chatId}`,
       LIMIT: 50,
     });
+    const messages = messageList(history.result);
+    notes.dialog = readDialog(messages, operatorIdsFrom(chat.result, assigneeId));
     let briefAt = "";
     let briefShot = "";
-    for (const message of messageList(history.result)) {
+    for (const message of messages) {
       const text = messageText(message);
       const sent = messageDate(message);
       const shot = shotFrom(message);
@@ -564,6 +780,7 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
       const marks = {};
       let brief = "";
       let finishBy = "";
+      let talk = null;
       if (proof) {
         finishBy = finishByText(row?.DATE_CREATE);
         const stageIsNew = field(stageName).toLowerCase() === "новая" || field(stageName).toLowerCase() === "новый";
@@ -576,10 +793,14 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
           const mark = proven("В комментарии карточки есть ТЗ.");
           if (mark) marks["AM-W1-4"] = mark;
         }
-        const dialog = await proofFromDialog(fetchImpl, base, field(row?.ID), now);
+        const dialog = await proofFromDialog(fetchImpl, base, field(row?.ID), now, assigneeId);
         Object.assign(marks, dialog.marks);
         brief = dialog.brief;
+        talk = dialog.dialog;
       }
+      const late = proof ? lateMap(row?.DATE_CREATE, marks, now) : null;
+      const stageFit = proof ? stageFitFor(stageName, row?.DATE_CREATE, now) : null;
+      const checklist = proof ? await bitrixChecklist(fetchImpl, base, field(row?.ID), people) : null;
       deals.push({
         id: field(row?.ID),
         title: organizationName(row?.TITLE),
@@ -591,7 +812,7 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
         funnel: item.funnel,
         ...(finishBy ? { finishBy } : {}),
         ...(brief ? { brief } : {}),
-        ...(proof ? { pilot: true } : {}),
+        ...(proof ? { pilot: true, late, stageFit, checklist, dialog: talk } : {}),
         marks,
         checks: (proof ? PILOT_CHECKS : STARTER_CHECKS).map((check) => {
           const mark = marks[check.code];

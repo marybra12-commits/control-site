@@ -119,8 +119,27 @@ function ReviewsTable({ deals }) {
   );
 }
 
+function stageProblem(deal) {
+  const fit = deal.stageFit;
+  if (!fit || fit.state === "right") return "";
+  const expected = fit.expected || "взято в работу";
+  if (fit.state === "missing" || !fit.stage) return `Стадия не указана. Для этого срока нужна «${expected}».`;
+  return `Стадия «${fit.stage}». Для этого срока нужна «${expected}».`;
+}
+
 function DealDetail({ section, deal, onBack }) {
   const checks = checklist(section, deal);
+  const [openProof, setOpenProof] = useState("");
+  const late = deal.pilot && deal.late && typeof deal.late === "object" ? deal.late : {};
+  const rows = checks.map((check) => ({
+    ...check,
+    due: typeof late[check.code] === "string" ? late[check.code] : "",
+    behind: Boolean(late[check.code]) && check.status !== "Сделано",
+  }));
+  const stageNote = deal.pilot ? stageProblem(deal) : "";
+  const behind = rows.filter((check) => check.behind);
+  const checklistItems = Array.isArray(deal.checklist) ? deal.checklist : null;
+
   return (
     <article className="card deal">
       <button type="button" className="back" onClick={onBack}>К списку</button>
@@ -147,24 +166,83 @@ function DealDetail({ section, deal, onBack }) {
           <dd>{deal.stage || noData}</dd>
         </div>
       </dl>
-      {checks.length > 0 ? (
+      {deal.pilot ? (
+        <section className="bitrix-work" aria-label="Назначение в Битриксе">
+          <h3>Как назначены люди в Битриксе</h3>
+          <p>Сделку ведёт ответственная: {deal.assignee || noData}. Пункт чек-листа ведёт человек в этом пункте. Если человек в пункте не указан, на карточке остаётся «Нет данных».</p>
+          {deal.stageFit?.state === "right" ? (
+            <p>Стадия «{deal.stageFit.stage}» для этого срока подходит. Ориентир: «{deal.stageFit.expected}».</p>
+          ) : null}
+          {stageNote ? <p>{stageNote}</p> : null}
+          <h3>Чек-лист Битрикса</h3>
+          {checklistItems === null ? <p>{noData}</p> : null}
+          {checklistItems && checklistItems.length === 0 ? <p>Чек-листов в Битриксе нет.</p> : null}
+          {checklistItems && checklistItems.length > 0 ? (
+            <ul className="bitrix-checks">
+              {checklistItems.map((item) => (
+                <li key={`${item.title}-${item.state}`}>
+                  <span>{item.title || "Пункт"}</span>
+                  <span>{item.state === "closed" ? "Закрыт" : "Открыт"}</span>
+                  <span>{item.assignee || noData}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          <h3>Переписка</h3>
+          <p>Тон клиента: {deal.dialog?.clientTone || noData}</p>
+          <p>Как отвечает: {deal.dialog?.replies || noData}</p>
+          <p>Тон менеджера: {deal.dialog?.managerTone || noData}</p>
+        </section>
+      ) : null}
+      {behind.length > 0 || stageNote ? (
+        <section className="behind" aria-label="Где клиент отстаёт">
+          <h3>Где клиент отстаёт</h3>
+          <ul>
+            {behind.map((check) => (
+              <li key={check.code}>{check.code}. {check.title}. Срок был {check.due}. {noData}</li>
+            ))}
+            {stageNote ? <li>{stageNote}</li> : null}
+          </ul>
+        </section>
+      ) : null}
+      {rows.length > 0 ? (
         <ul className="checks">
-          {checks.map((check) => (
-            <li key={check.code} className="check">
-              <span className="check-code">{check.code}</span>
-              <span className="check-title">
-                {check.title}
-                {check.status === "Сделано" && check.proof ? <span className="check-proof">{check.proof}</span> : null}
-                {check.status === "Сделано" && check.image ? <img className="check-shot" alt="" src={check.image} /> : null}
-              </span>
-              <span className={check.status === "Сделано" ? "pill pill-done" : "pill"}>{check.status}</span>
-            </li>
-          ))}
+          {rows.map((check) => {
+            const opened = openProof === check.code;
+            return (
+              <li key={check.code} className={check.behind ? "check check-late" : "check"}>
+                <span className="check-code">{check.code}</span>
+                <span className="check-title">
+                  {check.title}
+                  {check.behind ? <span className="late-tag">Просрочено, срок был {check.due}</span> : null}
+                </span>
+                {check.status === "Сделано" ? (
+                  <button
+                    type="button"
+                    className="done-button"
+                    aria-expanded={opened}
+                    onClick={() => setOpenProof(opened ? "" : check.code)}
+                  >
+                    Сделано
+                  </button>
+                ) : (
+                  <span className="pill">{noData}</span>
+                )}
+                {opened ? (
+                  <div className="proof-panel">
+                    {check.proof ? <p>{check.proof}</p> : null}
+                    {check.image ? <img className="check-shot" alt="" src={check.image} /> : null}
+                    {!check.proof && !check.image ? <p>{noData}</p> : null}
+                  </div>
+                ) : null}
+              </li>
+            );
+          })}
         </ul>
       ) : null}
       {deal.finishBy ? <p className="rule">Оформление сдать в течение месяца от старта, до {deal.finishBy}.</p> : null}
       {deal.brief ? <p className="rule">Бриф: {deal.brief}</p> : null}
-      <p className="rule">Чеклист обновляется каждый час. Зелёным только шаг, у которого есть текст или снимок.</p>
+      <p className="rule">Чеклист обновляется каждый час. Зелёная кнопка «Сделано» открывает текст или снимок. Без следа шаг остаётся «Нет данных».</p>
       <p className="rule">Нет следа в Битриксе — «Нет данных», не «Не сделано».</p>
     </article>
   );
@@ -320,7 +398,7 @@ export default function App() {
           ) : showReviews ? (
             <ReviewsTable deals={bitrix.deals} />
           ) : showDetail ? (
-            <DealDetail section={section} deal={openDeal} onBack={() => setOpenDealId(null)} />
+            <DealDetail key={openDealId} section={section} deal={openDeal} onBack={() => setOpenDealId(null)} />
           ) : showDeals ? (
             <DealCards deals={sectionDeals} onOpen={setOpenDealId} />
           ) : (

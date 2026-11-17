@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { acceptanceStatus, loadOformlenieDeals, organizationName, pipelineSection, webhookConfigured } from "./bitrix.js";
+import { acceptanceStatus, loadOformlenieDeals, organizationName, pipelineSection, readDialog, webhookConfigured } from "./bitrix.js";
 
 test("missing or blank webhook stays disconnected and does not call Bitrix", async () => {
   assert.equal(webhookConfigured({}), false);
@@ -85,6 +85,14 @@ test("each funnel keeps its active deals and drops a won card", async () => {
           { ID: 4, NAME: "Анна", LAST_NAME: "Смирнова" },
           { ID: 8, NAME: "Ольга", LAST_NAME: "Воробьева" },
         ],
+        "tasks.task.list.json": {
+          tasks: [{ id: "50", title: "Оформление", responsibleId: "9" }],
+        },
+        "task.checklistitem.getlist.json": [
+          { TITLE: "Витрина", PARENT_ID: "1", IS_COMPLETE: "Y", MEMBERS: [{ TYPE: "A", NAME: "Ольга Воробьева" }] },
+          { TITLE: "Фото", PARENT_ID: "1", IS_COMPLETE: "N", MEMBERS: [] },
+          { TITLE: "Список", PARENT_ID: "0", IS_COMPLETE: "N", MEMBERS: [] },
+        ],
       };
       let resultRows = payloads[method] ?? [];
       if (method === "crm.deal.list.json") {
@@ -114,6 +122,15 @@ test("each funnel keeps its active deals and drops a won card", async () => {
               DATE_CREATE: "2026-01-23T10:00:00+03:00",
               UF_LINK: "https://example.invalid/maps",
               UF_ADDRESS: "Рынок, 2",
+            },
+            {
+              ID: 31,
+              TITLE: "Раковый двор",
+              CATEGORY_ID: "2",
+              STAGE_ID: "C2:PREPARATION",
+              STAGE_SEMANTIC_ID: "P",
+              ASSIGNED_BY_ID: 8,
+              DATE_CREATE: "2026-11-10T10:00:00+03:00",
             },
             {
               ID: 11,
@@ -151,16 +168,27 @@ test("each funnel keeps its active deals and drops a won card", async () => {
       if (method === "imopenlines.crm.chat.get.json" && String(body.CRM_ENTITY) === "21") {
         resultRows = { CHAT_ID: "77", CONNECTOR_ID: "whatsapp" };
       }
+      if (method === "imopenlines.crm.chat.get.json" && String(body.CRM_ENTITY) === "31") {
+        resultRows = { CHAT_ID: "88", CONNECTOR_ID: "wazzup_whatsapp", OPERATOR_ID: "8" };
+      }
       if (method === "im.dialog.messages.get.json") {
-        resultRows = {
-          messages: [
-            {
-              text: "Добрый день, заполните бриф по ссылке",
-              date: "2026-01-23T12:00:00+03:00",
-              files: [{ type: "image", url: "https://example.invalid/brief.png" }],
-            },
-          ],
-        };
+        resultRows = String(body.DIALOG_ID) === "chat88"
+          ? {
+            messages: [
+              { author_id: "8", text: "Здравствуйте, я менеджер по оформлению", date: "2026-11-10T11:00:00+03:00" },
+              { author_id: "15", text: "Спасибо, добрый день", date: "2026-11-10T15:00:00+03:00" },
+              { author_id: "15", text: "Пожалуйста, жду макет", date: "2026-11-12T12:00:00+03:00" },
+            ],
+          }
+          : {
+            messages: [
+              {
+                text: "Добрый день, заполните бриф по ссылке",
+                date: "2026-01-23T12:00:00+03:00",
+                files: [{ type: "image", url: "https://example.invalid/brief.png" }],
+              },
+            ],
+          };
       }
       return {
         ok: true,
@@ -196,6 +224,7 @@ test("each funnel keeps its active deals and drops a won card", async () => {
   assert.equal(result.connected, true);
   assert.deepEqual(result.deals.map((deal) => deal.title), [
     "Островок надежды магазин продуктов",
+    "Раковый двор",
     "ИП Иванова Анна",
     "Кафе Волна",
   ]);
@@ -213,12 +242,40 @@ test("each funnel keeps its active deals and drops a won card", async () => {
   assert.equal(briefStep.proof, "Бриф отправлен 23.01.2026, 3 дня прошли.");
   assert.equal(briefStep.image, "https://example.invalid/brief.png");
   assert.equal(ostrovok.checks.find((check) => check.code === "AM-D0-2").status, "Нет данных");
+  assert.equal(ostrovok.late["AM-D0-2"], "23.01.2026");
+  assert.equal(ostrovok.late["AM-D0-1"], undefined);
+  assert.equal(ostrovok.late["AM-D0-3"], undefined);
+  assert.equal(ostrovok.stageFit.state, "wrong");
+  assert.equal(ostrovok.stageFit.stage, "Начало оформления");
+  assert.equal(ostrovok.stageFit.expected, "окончание");
+  assert.deepEqual(ostrovok.checklist, [
+    { title: "Витрина", state: "closed", assignee: "Ольга Воробьева" },
+    { title: "Фото", state: "open", assignee: "Нет данных" },
+  ]);
   assert.equal(ostrovok.checks.every((check) => check.status !== "Сделано" || check.proof || check.image), true);
-  assert.equal(result.deals[1].funnel, "oformlenie");
-  assert.equal(result.deals[1].stage, "В работе");
-  assert.equal(result.deals[1].checks.find((check) => check.code === "AM-D0-1").status, "Нет данных");
-  assert.equal(result.deals[2].funnel, "podderzhka");
-  assert.equal(result.deals[2].title, "Кафе Волна");
+  assert.deepEqual(ostrovok.dialog, {
+    clientTone: "Нет данных",
+    replies: "Нет данных",
+    managerTone: "Нет данных",
+  });
+  const rakovy = result.deals[1];
+  assert.equal(rakovy.pilot, true);
+  assert.equal(rakovy.stage, "В работе");
+  assert.equal(rakovy.stageFit.state, "right");
+  assert.equal(rakovy.stageFit.expected, "взято в работу");
+  assert.equal(rakovy.dialog.clientTone, "спокойный");
+  assert.equal(rakovy.dialog.replies, "отвечает в пределах трёх дней");
+  assert.equal(rakovy.dialog.managerTone, "спокойный");
+  assert.equal(rakovy.checklist[0].state, "closed");
+  assert.equal(rakovy.checklist[1].state, "open");
+  const ivanova = result.deals.find((deal) => deal.title === "ИП Иванова Анна");
+  assert.equal(ivanova.pilot, undefined);
+  assert.equal(ivanova.late, undefined);
+  assert.equal(ivanova.checklist, undefined);
+  assert.equal(ivanova.funnel, "oformlenie");
+  assert.equal(ivanova.stage, "В работе");
+  assert.equal(ivanova.checks.find((check) => check.code === "AM-D0-1").status, "Нет данных");
+  assert.equal(result.deals.find((deal) => deal.title === "Кафе Волна").funnel, "podderzhka");
   const packed = JSON.stringify(result);
   assert.equal(packed.includes("placeholder"), false);
   assert.equal(packed.includes("C2:WON"), false);
@@ -226,7 +283,23 @@ test("each funnel keeps its active deals and drops a won card", async () => {
   assert.equal(packed.includes("Магазин электрики"), false);
   assert.equal(packed.includes("Не сделано"), false);
   assert.equal(packed.includes("заполните бриф"), false);
+  assert.equal(packed.includes("жду макет"), false);
   assert.equal(packed.includes("Смирнова"), true);
+});
+
+test("dialog labels do not repeat the chat", () => {
+  const read = readDialog(
+    [
+      { author_id: "8", text: "Здравствуйте", date: "2026-11-10T11:00:00+03:00" },
+      { author_id: "15", text: "Спасибо", date: "2026-11-01T11:00:00+03:00" },
+      { author_id: "15", text: "Спасибо", date: "2026-11-12T11:00:00+03:00" },
+    ],
+    new Set(["8"]),
+  );
+  assert.equal(read.clientTone, "спокойный");
+  assert.equal(read.managerTone, "спокойный");
+  assert.equal(read.replies, "ответы реже раза в неделю");
+  assert.equal(JSON.stringify(read).includes("Спасибо"), false);
 });
 
 test("a failed read does not surface the endpoint", async () => {
