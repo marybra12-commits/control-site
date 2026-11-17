@@ -760,11 +760,33 @@ export function parseMapsProfile(html) {
     }
   }
   const alts = [...source.matchAll(/<img\b[^>]*\balt=["']([^"']+)["']/gi)].length;
-  const readable = Boolean(field(business.name) || field(address.streetAddress) || images.length || countNear(source, "photos") !== null);
+  const meta = (key) => {
+    const patterns = [
+      new RegExp(`<meta[^>]+(?:property|name)=["']${key}["'][^>]+content=["']([^"']+)["']`, "i"),
+      new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${key}["']`, "i"),
+    ];
+    for (const pattern of patterns) {
+      const match = source.match(pattern);
+      if (match?.[1]) return match[1].replace(/&quot;/g, "\"").replace(/&#39;/g, "'").trim();
+    }
+    return "";
+  };
+  const title = (source.match(/<title>([^<]+)<\/title>/i)?.[1] || "")
+    .replace(/\s+[—-]\s+Яндекс.*$/i, "")
+    .trim();
+  const name = field(business.name) || meta("og:title") || title;
+  const described = `${meta("og:description")} ${meta("description")}`;
+  const addressText = field(address.streetAddress)
+    || (described.match(/(?:ул\.|улица|проспект|пр-т|набереж\w+|переулок|шоссе)[^.]{0,80}/i)?.[0] || "").trim();
+  const cover = meta("og:image");
+  if (cover) images.push(cover);
+  const readable = Boolean(name || addressText || images.length || countNear(source, "photos") !== null || source.length > 800);
   return {
     readable,
-    name: Boolean(field(business.name)),
-    address: Boolean(field(address.streetAddress) || field(address.addressLocality)),
+    opened: source.length > 0,
+    name: Boolean(name),
+    addressText,
+    address: Boolean(addressText),
     entrance: /"entrances"\s*:/.test(source) || source.toLowerCase().includes("\"вход\""),
     coords: Boolean(business.geo) || /"coordinates"\s*:/.test(source),
     images: images.length,
@@ -784,7 +806,7 @@ function allowedMapsUrl(value) {
   try {
     const url = new URL(value);
     const host = url.hostname.toLowerCase();
-    const yandex = host === "ya.ru" || host.endsWith(".ya.ru") || host.includes("yandex.");
+    const yandex = host === "ya.ru" || host.endsWith(".ya.ru") || host === "yandex.ru" || host.endsWith(".yandex.ru") || host === "yandex.com" || host.endsWith(".yandex.com") || host === "yandex.by" || host.endsWith(".yandex.by") || host === "yandex.kz" || host.endsWith(".yandex.kz");
     const path = url.pathname.toLowerCase();
     return url.protocol === "https:" && yandex && (path.includes("/maps") || path.includes("/profile"));
   } catch {
@@ -797,13 +819,13 @@ async function readMapsProfile(fetchImpl, link) {
   try {
     const response = await fetchImpl(link, {
       method: "GET",
-      headers: { Accept: "text/html" },
+      headers: { Accept: "text/html", "User-Agent": "Mozilla/5.0" },
       signal: AbortSignal.timeout(12000),
     });
     if (!response?.ok || (response.url && !allowedMapsUrl(response.url))) return null;
     const html = typeof response.text === "function" ? await response.text() : "";
     const profile = parseMapsProfile(html);
-    return profile.readable ? profile : null;
+    return profile.opened ? profile : null;
   } catch {
     return null;
   }
@@ -868,31 +890,45 @@ function factFor(profile, key) {
   return { state: "unknown", missing: NO_DATA, proof: "" };
 }
 
+function dealSite(row, definitions, mapsLink) {
+  for (const entry of linkEntries(row, definitions)) {
+    const site = extractHttpUrls(row?.[entry.name]).filter(usableProfileUrl).find((url) => url !== mapsLink && !isMapsUrl(url));
+    if (site) return site;
+  }
+  return "";
+}
+
 function heardLine(heard, key) {
   const said = heard && heard[key];
   if (!said) return "";
   return " В переписке это уже звучало, на Картах не видно.";
 }
 
-export function controlBrief({ maps, created, now, heard, replies }) {
+function dealFact(pointKey, deal) {
+  if (pointKey === "place" && deal.address) return `В сделке указан адрес: ${deal.address}.`;
+  if (pointKey === "links" && deal.site) return `В сделке указан сайт: ${deal.site}.`;
+  if (pointKey === "head" && deal.link) return "В сделке есть ссылка на профиль.";
+  return "";
+}
+
+function chatFact(pointKey, heard) {
+  const key = pointKey === "design" ? "cover" : pointKey === "photos" ? "photo" : pointKey;
+  if (!heard?.[key]) return "";
+  return "В переписке Wazzup это уже есть.";
+}
+
+export function controlBrief({ maps, created, now, heard, replies, deal = {} }) {
   const start = dayZeroKey(created);
   const slow = typeof replies === "string" && (replies.includes("реже") || replies.includes("пауза"));
+  const opened = Boolean(maps?.opened || maps?.readable);
   const rows = CONTROL_POINTS.map((point) => {
-    const fact = point.key === "qr"
-      ? { state: heard?.qr ? "unknown" : "unknown", missing: NO_DATA, proof: "" }
-      : factFor(maps, point.key);
+    const fact = factFor(opened ? maps : null, point.key);
+    const fromDeal = dealFact(point.key, deal);
+    const fromChat = chatFact(point.key, heard);
     const dueKey = start && typeof point.due === "number" ? addDays(start, point.due) : "";
     const due = dueKey ? formatDay(dueKey) : "";
     const late = Boolean(dueKey && now > atMoscowHour(dueKey, 18));
-    if (!maps && point.key !== "qr") {
-      return {
-        title: point.title,
-        stuck: NO_DATA,
-        missing: NO_DATA,
-        say: "В сделке нет ссылки на Карты, или страница не открылась.",
-        why: NO_DATA,
-      };
-    }
+    const pause = slow ? " Клиент отвечает с паузами." : "";
     if (fact.state === "yes" && fact.proof) {
       return {
         title: point.title,
@@ -905,28 +941,52 @@ export function controlBrief({ maps, created, now, heard, replies }) {
         why: "На Картах это видно.",
       };
     }
-    if (fact.state === "unknown") {
+    if (fact.state !== "no" && (fromDeal || fromChat)) {
+      const proof = [fromDeal, fromChat].filter(Boolean).join(" ");
+      return {
+        title: point.title,
+        stuck: "Нет",
+        missing: "Нет",
+        status: DONE,
+        state: "closed",
+        proof,
+        say: "Ничего не говорить: след уже есть.",
+        why: proof,
+      };
+    }
+    if (fact.state === "no" || (opened && fact.state !== "yes" && point.key !== "qr" && point.key !== "seo")) {
+      const missing = fact.state === "no" ? fact.missing : "На странице Карт этого не видно.";
+      const chat = fromChat ? ` ${fromChat} На Картах этого нет.` : "";
+      return {
+        title: point.title,
+        stuck: point.title,
+        missing: fromDeal ? `${missing} ${fromDeal}` : missing,
+        status: NOT_DONE,
+        state: "open",
+        say: due
+          ? (late ? `Добавьте «${point.title}» на Карты. Срок был ${due}.` : `Добавьте «${point.title}» на Карты до ${due}.`)
+          : `Добавьте «${point.title}» на Карты.`,
+        why: `${late && due ? `Срок ${due} прошёл, на Картах этого нет.` : due ? "Срок ещё не вышел." : "На Картах этого нет."}${chat}${pause}`,
+      };
+    }
+    if (!opened && !deal.link) {
       return {
         title: point.title,
         stuck: NO_DATA,
         missing: NO_DATA,
-        say: point.key === "qr" ? "QR на Картах не виден. Смотреть только если его отправляли клиенту." : NO_DATA,
-        why: heard?.qr && point.key === "qr" ? "В переписке QR уже звучал." : NO_DATA,
+        say: "В сделке нет ссылки на Карты.",
+        why: NO_DATA,
       };
     }
-    const pause = slow ? " Клиент отвечает с паузами." : "";
-    const chat = heardLine(heard, point.key === "design" ? "cover" : point.key === "photos" ? "photo" : point.key === "news" ? "news" : point.key === "stories" ? "stories" : point.key === "links" ? "links" : point.key === "goods" ? "goods" : point.key === "reviews" ? "reviews" : point.key === "seo" ? "seo" : "");
     return {
       title: point.title,
-      stuck: point.title,
-      missing: fact.missing,
-      say: due
-        ? (late ? `Добавьте «${point.title}» на Карты. Срок был ${due}.` : `Добавьте «${point.title}» на Карты до ${due}.`)
-        : `Добавьте «${point.title}» на Карты.`,
-      why: `${late && due ? `Срок ${due} прошёл, на Картах этого нет.` : due ? "Срок ещё не вышел." : NO_DATA}${chat}${pause}`,
+      stuck: NO_DATA,
+      missing: NO_DATA,
+      say: opened ? NO_DATA : "Страница Карт не открылась.",
+      why: fromChat || NO_DATA,
     };
   });
-  rows.sort((left, right) => Number(right.stuck !== "Нет" && right.stuck !== NO_DATA) - Number(left.stuck !== "Нет" && left.stuck !== NO_DATA));
+  rows.sort((left, right) => Number(right.status === NOT_DONE) - Number(left.status === NOT_DONE));
   return rows;
 }
 
@@ -1416,19 +1476,22 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
         : visible;
       const profileLink = dealProfileLink(row, fields) || firstValue(row, linkFields);
       const maps = named ? await readMapsProfile(fetchImpl, profileLink) : null;
+      const site = named ? dealSite(row, fields, profileLink) : "";
+      const address = dealAddress(row, addressFields) || maps?.addressText || "";
       const report = named ? controlBrief({
         maps,
         created: row?.DATE_CREATE,
         now,
         heard,
         replies: talk?.replies,
+        deal: { address, site, link: profileLink },
       }) : null;
       deals.push({
         id: field(row?.ID),
         title: organizationName(row?.TITLE),
         period: present(periodText(periodField ? row?.[periodField] : "", row?.BEGINDATE, row?.CLOSEDATE)),
-        link: present(dealProfileLink(row, fields) || firstValue(row, linkFields)),
-        address: present(dealAddress(row, addressFields)),
+        link: present(profileLink),
+        address: present(address),
         assignee: present(people.get(assigneeId) ?? ""),
         stage: present(stageName),
         funnel: item.funnel,

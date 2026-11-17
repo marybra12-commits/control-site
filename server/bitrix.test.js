@@ -382,7 +382,7 @@ test("each funnel keeps its active deals and drops a won card", async () => {
   const goods = rakovy.report.find((item) => item.title === "Товары в витрине");
   assert.equal(goods.stuck, "Товары в витрине");
   assert.equal(goods.missing, "На Картах нет товаров в витрине.");
-  assert.equal(goods.status, undefined);
+  assert.equal(goods.status, "Не сделано");
   assert.equal(rakovy.report.find((item) => item.title === "QR-код").stuck, "Нет данных");
   assert.equal(rakovy.report.length, 11);
   assert.equal(packed.includes("заполните бриф"), false);

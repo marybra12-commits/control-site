@@ -191,7 +191,13 @@ function DealDetail({ section, deal, onBack }) {
         ) : null}
       </dl>
       {report ? (
-        <div className="table-scroll">
+        <>
+          <p className={report.some((item) => item.status === "Не сделано") ? "stuck-banner" : "stuck-banner stuck-clear"}>
+            {report.some((item) => item.status === "Не сделано")
+              ? `Застряло: ${report.filter((item) => item.status === "Не сделано").map((item) => item.title).join(", ")}`
+              : "Застрявших пунктов нет."}
+          </p>
+          <div className="table-scroll">
           <table className="work-table">
             <caption>Что страдает по регламенту. Сверка каждый час: сделка, Карты и переписка.</caption>
             <thead>
@@ -223,6 +229,7 @@ function DealDetail({ section, deal, onBack }) {
                           Сделано
                         </button>
                       ) : null}
+                      {item.status === "Не сделано" ? <span className="miss-button">Не сделано</span> : null}
                       {opened ? <p className="proof-line">{item.proof}</p> : null}
                     </td>
                     <td>{item.missing || noData}</td>
@@ -233,7 +240,8 @@ function DealDetail({ section, deal, onBack }) {
               })}
             </tbody>
           </table>
-        </div>
+          </div>
+        </>
       ) : null}
       {stageNote && report ? <p className="stage-line">{stageNote}</p> : null}
       {report && talk.length > 0 ? (

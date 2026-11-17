@@ -547,6 +547,34 @@ dd {
   font-size: 14px;
 }
 
+.stuck-banner {
+  margin: 20px 0 0;
+  padding: 14px 16px;
+  border-radius: 8px;
+  background: #fbf4f2;
+  color: #8c2f2f;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.stuck-clear {
+  background: #f4f7f5;
+  color: var(--accent);
+}
+
+.miss-button {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: #8c2f2f;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.3;
+  padding: 6px 12px;
+  white-space: nowrap;
+}
+
 .table-scroll {
   margin-top: 20px;
   overflow-x: auto;
