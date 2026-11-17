@@ -17,6 +17,26 @@ async function withEnv(value, run) {
   }
 }
 
+test("published route reads the static runtime webhook", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    async json() {
+      return { result: [] };
+    },
+  });
+  try {
+    await withEnv("https://example.invalid/rest/1/placeholder", async () => {
+      const response = await apiGet(new Request("http://127.0.0.1/api/oformlenie"));
+      const body = await response.json();
+      assert.equal(body.connected, true);
+      assert.equal(JSON.stringify(body).includes("example.invalid"), false);
+    });
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 test("published route reads the webhook from the request runtime env", async () => {
   const hidden = new Proxy({}, {
     get(_target, key) {

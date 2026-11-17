@@ -2,33 +2,48 @@ import { loadOformlenieDeals, serviceEnv } from "./bitrix.js";
 
 const WEBHOOK_ENV = "BITRIX_WEBHOOK_URL";
 
-function readNamed(source) {
+function asWebhook(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function fromSource(source) {
   if (!source || (typeof source !== "object" && typeof source !== "function")) return "";
   try {
-    const value = source[WEBHOOK_ENV];
-    return typeof value === "string" ? value.trim() : "";
+    return asWebhook(source[WEBHOOK_ENV]);
   } catch {
     return "";
   }
 }
 
-export function envForRequest(context) {
-  const live = serviceEnv();
-  const value = readNamed(live) || readNamed(context?.env) || readNamed(context) || readNamed(globalThis.env);
-  if (!value) return live;
-  if (readNamed(live) === value) return live;
-  return { ...live, [WEBHOOK_ENV]: value };
+// Static member access. The published host injects this secret for this expression.
+export function literalWebhook() {
+  try {
+    return asWebhook(process.env.BITRIX_WEBHOOK_URL);
+  } catch {
+    return "";
+  }
 }
 
-export async function GET(_request, context) {
+export function envForRequest(context, configured) {
+  const value = asWebhook(configured)
+    || literalWebhook()
+    || fromSource(serviceEnv())
+    || fromSource(context?.env)
+    || fromSource(context)
+    || fromSource(globalThis.env);
+  if (!value) return {};
+  return { [WEBHOOK_ENV]: value };
+}
+
+export async function GET(_request, context, configured) {
   try {
-    const body = await loadOformlenieDeals(envForRequest(context));
+    const body = await loadOformlenieDeals(envForRequest(context, configured));
     return Response.json(body, {
       headers: { "cache-control": "no-store" },
     });
   } catch {
     return Response.json(
-      { connected: false, deals: [] },
+      { connected: false, unavailable: true, deals: [] },
       { headers: { "cache-control": "no-store" } },
     );
   }

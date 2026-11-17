@@ -7,6 +7,7 @@ function sectionFromHash() {
 }
 
 function connectionLine(bitrix) {
+  if (bitrix.pending) return "Читаем Битрикс…";
   if (bitrix.connected) return "Битрикс подключён.";
   if (bitrix.unavailable) return "Битрикс не ответил.";
   return disconnectedLine;
@@ -207,6 +208,7 @@ function DealCards({ deals, onOpen }) {
 }
 
 function clientNote(bitrix) {
+  if (bitrix.pending) return "Читаем сделки из Битрикса…";
   if (bitrix.connected && bitrix.deals.length === 0) return "Сделок в Битриксе нет.";
   if (bitrix.unavailable) return "Сделки не получены.";
   return emptyState;
@@ -218,6 +220,7 @@ export default function App() {
   const [bitrix, setBitrix] = useState({
     connected: false,
     unavailable: false,
+    pending: true,
     deals: [],
   });
 
@@ -233,19 +236,24 @@ export default function App() {
   useEffect(() => {
     let ignore = false;
     const load = () => {
-      fetch("/api/oformlenie", { cache: "no-store" })
-        .then((response) => response.json())
+      fetch("/api/oformlenie", { cache: "no-store", headers: { accept: "application/json" } })
+        .then(async (response) => {
+          const type = response.headers.get("content-type") || "";
+          if (!response.ok || !type.includes("json")) throw new Error("unavailable");
+          return response.json();
+        })
         .then((body) => {
           if (ignore) return;
           setBitrix({
             connected: body?.connected === true,
             unavailable: body?.unavailable === true,
+            pending: false,
             deals: Array.isArray(body?.deals) ? body.deals : [],
           });
         })
         .catch(() => {
           if (ignore) return;
-          setBitrix({ connected: false, unavailable: false, deals: [] });
+          setBitrix({ connected: false, unavailable: true, pending: false, deals: [] });
         });
     };
     load();
