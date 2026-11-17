@@ -34,7 +34,7 @@ test("root handler reads the runtime env and returns deal titles only", async ()
     called = true;
     const method = String(url).split("/").pop();
     const payloads = {
-      "crm.dealcategory.list.json": [{ ID: "4", NAME: "Оформление" }],
+      "crm.dealcategory.list.json": [{ ID: "4", NAME: "Оформление ЯКарты/Аналитика" }],
       "crm.deal.list.json": [{
         ID: "3",
         TITLE: "Карточка",
