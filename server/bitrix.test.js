@@ -461,6 +461,31 @@ test("a present point, photos and goods stay done", () => {
   assert.equal(rows.find((item) => item.title === "Геолокация и вход").proof.includes("точка"), true);
 });
 
+test("a goods tab and a news tab are not missing", () => {
+  const html = `<script type="application/json" class="state-view">${JSON.stringify({
+    stack: [{ results: { items: [{
+      shortTitle: "Раковый двор",
+      fullAddress: "Ростов-на-Дону, улица Александра Бондарева, 6",
+      coordinates: [39.8, 47.2],
+      photos: { count: 23, items: [{ alt: "Рыба, фото" }] },
+    }] } }],
+  })}</script>
+  <a aria-label="Товары и услуги, "></a>
+  <a aria-label="Новости, 5"></a>`;
+  const profile = parseMapsProfile(html);
+  const rows = controlBrief({
+    maps: profile,
+    created: "2026-10-01",
+    now: new Date("2026-11-17T12:00:00+03:00"),
+    heard: {},
+    deal: { link: "https://yandex.ru/maps/-/CXSKA-pK" },
+  });
+  const status = (title) => rows.find((item) => item.title === title).status;
+  assert.equal(status("Товары в витрине"), "Сделано");
+  assert.equal(status("Новости"), "Сделано");
+  assert.equal(rows.find((item) => item.title === "Новости").proof.includes("5"), true);
+});
+
 test("a Maps profile page yields the facts it actually contains", () => {
   const html = `<title>Раковый двор, кафе — Яндекс Карты</title>
     <script type="application/json" class="state-view">${JSON.stringify({

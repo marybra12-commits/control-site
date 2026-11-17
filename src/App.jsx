@@ -203,7 +203,9 @@ function DealDetail({ section, deal, onBack }) {
       ) : null}
       {report ? (
         <>
-          {report.some((item) => item.status === "Не сделано") ? (
+          {report.length > 0 && report.every((item) => item.status === "Сделано") ? (
+            <p className="stuck-banner ready-banner">Карточка готова к проверке.</p>
+          ) : report.some((item) => item.status === "Не сделано") ? (
             <div className="stuck-banner">
               <p>Застряло</p>
               <ul className="stuck-list">

@@ -4,58 +4,198 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Коммерческое предложение — Раковый двор</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
+    :root {
+      --ink: #1a1a1a;
+      --muted: #5f5f5f;
+      --line: #e6e6e4;
+      --accent: #1c4e3e;
+      --paper: #ffffff;
+      --canvas: #f3f3f1;
+    }
+    * { box-sizing: border-box; }
     body {
       margin: 0;
-      background: #f6f5f3;
-      color: #1c1c1c;
+      background: var(--canvas);
+      color: var(--ink);
       font-family: Montserrat, sans-serif;
+      font-weight: 400;
+      line-height: 1.55;
     }
     main {
-      max-width: 720px;
+      max-width: 760px;
       margin: 0 auto;
-      padding: 48px 24px 72px;
-      background: #fff;
+      padding: 40px 20px 72px;
     }
-    h1 { margin: 0 0 8px; font-size: 28px; font-weight: 500; }
-    h2 { margin: 32px 0 8px; font-size: 16px; font-weight: 500; }
-    p, li { font-size: 15px; line-height: 1.5; }
-    .meta { margin: 0; color: #5c5c5c; }
-    a { color: #1c1c1c; }
-    ol { padding-left: 20px; }
-    li + li { margin-top: 10px; }
+    article {
+      background: var(--paper);
+      padding: 56px 56px 48px;
+    }
+    .eyebrow {
+      margin: 0;
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+    h1 {
+      margin: 12px 0 0;
+      font-size: 40px;
+      font-weight: 500;
+      letter-spacing: -0.03em;
+      line-height: 1.1;
+    }
+    .lead {
+      max-width: 38em;
+      margin: 20px 0 0;
+      font-size: 17px;
+    }
+    .facts {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 28px;
+      margin: 28px 0 0;
+      padding: 0;
+      list-style: none;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .facts a { color: inherit; }
+    h2 {
+      margin: 48px 0 8px;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .intro {
+      margin: 0 0 8px;
+      max-width: 40em;
+      color: var(--muted);
+      font-size: 15px;
+    }
+    ol.steps {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    ol.steps > li {
+      display: grid;
+      grid-template-columns: 44px minmax(0, 1fr);
+      gap: 8px 18px;
+      padding: 26px 0;
+      border-top: 1px solid var(--line);
+    }
+    .num {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #fff;
+      font-size: 16px;
+      font-weight: 500;
+      line-height: 44px;
+      text-align: center;
+    }
+    .step h3 {
+      margin: 8px 0 0;
+      font-size: 22px;
+      font-weight: 500;
+      letter-spacing: -0.02em;
+    }
+    .why, .do {
+      margin: 10px 0 0;
+      font-size: 15px;
+    }
+    .why strong, .do strong {
+      display: block;
+      margin-bottom: 2px;
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .kept {
+      margin: 8px 0 0;
+      padding: 0;
+      list-style: none;
+    }
+    .kept li {
+      padding: 10px 0;
+      border-top: 1px solid var(--line);
+      font-size: 15px;
+    }
+    .close {
+      margin: 36px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    @media (max-width: 680px) {
+      article { padding: 36px 22px 32px; }
+      h1 { font-size: 32px; }
+      ol.steps > li { grid-template-columns: 1fr; }
+    }
+    @media print {
+      body { background: #fff; }
+      main { padding: 0; }
+      article { padding: 0; }
+    }
   </style>
 </head>
 <body>
   <main>
-    <p class="meta">Коммерческое предложение</p>
-    <h1>Раковый двор</h1>
-    <p class="meta">Ростов-на-Дону, улица Александра Бондарева, 6</p>
-    <p class="meta">Карточка: <a href="https://yandex.ru/maps/-/CXSKA-pK">https://yandex.ru/maps/-/CXSKA-pK</a></p>
+    <article>
+      <p class="eyebrow">Коммерческое предложение</p>
+      <h1>Раковый двор</h1>
+      <p class="lead">Карточка на Яндекс Картах уже работает: точка, название, фото, витрина и новости на месте. Дальше имеет смысл то, чего на карточке нет и что приведёт покупателя дальше Карт.</p>
+      <ul class="facts">
+        <li>Ростов-на-Дону, улица Александра Бондарева, 6</li>
+        <li><a href="https://yandex.ru/maps/-/CXSKA-pK">yandex.ru/maps/-/CXSKA-pK</a></li>
+      </ul>
 
-    <h2>План</h2>
-    <ol>
-      <li>Свой сайт. В карточке нет сайта клиента: ссылка ведёт на страницу Яндекса. Сделать сайт магазина и поставить его в карточку вместо этой страницы.</li>
-      <li>Оптимизация. Продвигать в поиске пока нечего. После запуска связать сайт с карточкой и заменить шаблонные подписи фото на свои.</li>
-      <li>Фото. На Картах уже 23 фото, но подпись у них одна и та же: «фото». Снять фасад, витрину и товар отдельно и подписать каждый кадр.</li>
-    </ol>
+      <h2>Три шага</h2>
+      <p class="intro">Сначала то, без чего остальные шаги некуда ставить. У каждого шага одна причина и одно действие агентства.</p>
+      <ol class="steps">
+        <li>
+          <div class="num">1</div>
+          <div class="step">
+            <h3>Свой сайт</h3>
+            <p class="why"><strong>Зачем</strong>В карточке нет сайта магазина. Ссылка ведёт на страницу Яндекса, а не на адрес клиента. Человек нашёл точку и ему некуда перейти.</p>
+            <p class="do"><strong>Что сделаем</strong>Соберём сайт магазина: адрес, телефон, витрина и кнопка маршрута на эту карточку. Поставим его ссылкой в профиль вместо страницы Яндекса.</p>
+          </div>
+        </li>
+        <li>
+          <div class="num">2</div>
+          <div class="step">
+            <h3>Оптимизация</h3>
+            <p class="why"><strong>Зачем</strong>Продвигать пока нечего: своего сайта нет. На 23 фото одна и та же подпись «фото», поиску не за что зацепиться.</p>
+            <p class="do"><strong>Что сделаем</strong>После запуска свяжем сайт с карточкой, подпишем страницы под запрос «раки Ростов» и заменим шаблонные подписи фото на свои.</p>
+          </div>
+        </li>
+        <li>
+          <div class="num">3</div>
+          <div class="step">
+            <h3>Съёмка</h3>
+            <p class="why"><strong>Зачем</strong>Фотографии на Картах уже есть, 23 кадра. По подписи не понять, что это за товар: у всех одно и то же окончание «фото».</p>
+            <p class="do"><strong>Что сделаем</strong>Снимем фасад, витрину и товар отдельно. У каждого кадра будет своя подпись, а не общая строка.</p>
+          </div>
+        </li>
+      </ol>
 
-    <h2>Чего не хватает</h2>
-    <ol>
-      <li>Своего сайта нет. На Картах стоит только страница Яндекса, своего адреса сайта нет.</li>
-      <li>Сайт не из чего оптимизировать: своего сайта нет, а подписи фото на Картах шаблонные.</li>
-      <li>Рабочих подписей и отдельной съёмки нет. Фотографии на Картах есть, описания товара в них нет.</li>
-    </ol>
-
-    <h2>Что добавляет агентство</h2>
-    <ol>
-      <li>Сайт магазина: адрес, телефон, витрина и кнопка маршрута на Карты.</li>
-      <li>Связку сайта с карточкой и страницы, которые можно найти по запросу «раки Ростов».</li>
-      <li>Съёмку фасада, витрины и товара и отдельную подпись к каждому фото.</li>
-    </ol>
-
-    <h2>Что уже есть</h2>
-    <p>Точка на карте и адрес есть. В шапке название «Раковый двор», есть логотип и фото. Витрина с товарами есть. На Картах 5 новостей, есть сторис, на открытых отзывах есть ответ компании. Это в предложение не входит.</p>
+      <h2>Уже есть, в работу не берём</h2>
+      <ul class="kept">
+        <li>Точка и адрес на карте.</li>
+        <li>Шапка «Раковый двор», логотип и фото.</li>
+        <li>Витрина товаров и 5 новостей.</li>
+        <li>Сторис и ответы компании на открытых отзывах.</li>
+      </ul>
+      <p class="close">Предложение собрано по открытой карточке. Чего на ней не видно, того здесь нет.</p>
+    </article>
   </main>
 </body>
 </html>

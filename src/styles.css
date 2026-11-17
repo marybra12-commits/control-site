@@ -594,9 +594,16 @@ dd {
   grid-template-columns: 168px minmax(0, 1fr);
 }
 
-.stuck-clear {
+.stuck-clear,
+.ready-banner {
   background: #f4f7f5;
   color: var(--accent);
+}
+
+.ready-banner {
+  background: #e7f2ec;
+  font-size: 16px;
+  font-weight: 500;
 }
 
 .status-checks {

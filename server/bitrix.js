@@ -894,8 +894,10 @@ export function parseMapsProfile(html) {
   const newsTab = tabCount(source, "Новости");
   const storiesTab = tabCount(source, "Истории");
   const goodsListed = goodsInCard(card);
-  const goods = goodsListed ?? countNear(source, "goods") ?? goodsTab ?? menuTab ?? (tabsSeen && goodsTab === null && menuTab === null && !/aria-label="Товары/.test(source) ? 0 : null);
-  const posts = countNear(source, "posts") ?? (tabsSeen ? (newsTab ?? 0) : null);
+  const goodsTabPresent = /aria-label="(?:Товары|Меню)/i.test(source);
+  const newsTabPresent = /aria-label="Новости/i.test(source);
+  const goods = goodsListed ?? countNear(source, "goods") ?? goodsTab ?? menuTab ?? (tabsSeen && !goodsTabPresent ? 0 : null);
+  const posts = countNear(source, "posts") ?? newsTab ?? (tabsSeen && !newsTabPresent ? 0 : null);
   const stories = countNear(source, "stories") ?? (card && typeof card.hasStories === "boolean"
     ? (card.hasStories ? 1 : 0)
     : (tabsSeen ? (storiesTab ?? 0) : null));
@@ -922,7 +924,9 @@ export function parseMapsProfile(html) {
     photoSections: photoAlts.some((alt) => !/,\s*фото$/.test(alt)) || (!card && /"photoSections"\s*:\s*\[/.test(source)),
     externalLinks: links.length,
     goods,
+    goodsPresent: goodsTabPresent || (typeof goods === "number" && goods > 0),
     posts,
+    newsPresent: newsTabPresent || (typeof posts === "number" && posts > 0),
     stories,
     reviews,
     reviewAnswers,
@@ -1019,13 +1023,14 @@ function factFor(profile, key) {
   }
   if (key === "goods") {
     if (profile.goods > 0) return { state: "yes", missing: "Нет", proof: `На Картах в витрине ${profile.goods} товаров.` };
+    if (profile.goodsPresent) return { state: "yes", missing: "Нет", proof: "На Картах есть витрина товаров." };
     if (profile.goods === 0) return { state: "no", missing: "На Картах нет товаров в витрине.", proof: "" };
     return { state: "unknown", missing: "", proof: "" };
   }
   if (key === "news") {
-    if (profile.posts >= 5) return { state: "yes", missing: "Нет", proof: `На Картах ${profile.posts} новостей.` };
+    if (profile.posts > 0) return { state: "yes", missing: "Нет", proof: `На Картах ${profile.posts} новостей.` };
+    if (profile.newsPresent) return { state: "yes", missing: "Нет", proof: "На Картах есть новости." };
     if (profile.posts === 0) return { state: "no", missing: "На Картах нет новостей.", proof: "" };
-    if (profile.posts > 0) return { state: "no", missing: `На Картах ${profile.posts} новостей, нужно 5.`, proof: "" };
     return { state: "unknown", missing: "", proof: "" };
   }
   if (key === "reviews") {
