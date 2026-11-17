@@ -195,6 +195,7 @@ test("each funnel keeps its active deals and drops a won card", async () => {
         resultRows = {
           ID: 31,
           UF_HIDDEN_MAP: { url: "https://yandex.ru/maps/org/rakovy-dvor/42" },
+          UF_DISK: "https://disk.yandex.ru/d/not-the-profile",
           UF_HIDDEN_ADDRESS: { ADDRESS_1: "Набережная, 4", CITY: "Санкт-Петербург" },
           UF_PERIOD: "ноябрь",
         };
@@ -337,6 +338,7 @@ test("each funnel keeps its active deals and drops a won card", async () => {
   });
   const rakovy = result.deals.find((deal) => deal.title === "Автосделка Раковой Двор Оформление+3Д");
   assert.equal(rakovy.link, "https://yandex.ru/maps/org/rakovy-dvor/42");
+  assert.equal(JSON.stringify(rakovy).includes("disk.yandex"), false);
   assert.equal(rakovy.address, "Набережная, 4, Санкт-Петербург");
   assert.equal(rakovy.period, "ноябрь");
   assert.equal(rakovy.assignee, "Ольга Воробьева");

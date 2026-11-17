@@ -581,6 +581,30 @@ dd {
   color: var(--accent);
 }
 
+.status-checks {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.status-checks li {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 8px 12px;
+  align-items: center;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.status-checks .proof-line,
+.status-checks .check-note {
+  grid-column: 2 / -1;
+  margin: 0;
+  color: var(--muted, #5c5c5c);
+  font-size: 13px;
+  font-weight: 400;
+}
+
 .miss-button {
   display: inline-flex;
   align-items: center;

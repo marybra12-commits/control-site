@@ -364,10 +364,26 @@ function usableProfileUrl(url) {
   }
 }
 
-function isMapsUrl(url) {
+function isDiskUrl(url) {
   try {
     const host = new URL(url).hostname.toLowerCase();
-    return host.includes("yandex") || host.endsWith("ya.ru") || host.includes("2gis.") || host.endsWith("2gis.ru");
+    return host === "yadi.sk" || host.endsWith(".yadi.sk") || host.includes("disk.yandex");
+  } catch {
+    return false;
+  }
+}
+
+function isMapsUrl(url) {
+  if (isDiskUrl(url)) return false;
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    const path = parsed.pathname.toLowerCase();
+    const yandex = host === "ya.ru" || host.endsWith(".ya.ru") || /(^|\.)yandex\.(ru|com|by|kz|uz)$/.test(host);
+    const gis = host === "2gis.ru" || host.endsWith(".2gis.ru") || host.endsWith(".2gis.kz") || host.endsWith(".2gis.by");
+    if (yandex) return path.includes("/maps") || path.includes("/profile");
+    if (gis) return path.includes("/firm") || path.includes("/geo");
+    return false;
   } catch {
     return false;
   }
@@ -384,17 +400,17 @@ function linkEntries(row, definitions) {
 
 function dealProfileLink(row, definitions) {
   const ranked = [];
+  for (const value of Object.values(row || {})) {
+    const maps = extractHttpUrls(value).filter(usableProfileUrl).find(isMapsUrl);
+    if (maps) ranked.push({ rank: 0, url: maps });
+  }
   for (const entry of linkEntries(row, definitions)) {
     const labelRank = LINK_NEEDLES.findIndex((needle) => entry.label.includes(needle));
     const urlType = entry.type === "url";
-    const custom = entry.name.startsWith("UF_");
-    if (labelRank === -1 && !urlType && !custom) continue;
-    const urls = extractHttpUrls(row?.[entry.name]).filter(usableProfileUrl);
-    const maps = urls.find(isMapsUrl) || "";
-    const chosen = maps || ((labelRank !== -1 || urlType) ? urls[0] || "" : "");
-    if (!chosen) continue;
-    const rank = maps ? 0 : (labelRank === -1 ? LINK_NEEDLES.length + 2 : labelRank + 1);
-    ranked.push({ rank, url: chosen });
+    if (labelRank === -1 && !urlType) continue;
+    const other = extractHttpUrls(row?.[entry.name]).filter(usableProfileUrl).find((url) => !isMapsUrl(url) && !isDiskUrl(url));
+    if (!other) continue;
+    ranked.push({ rank: labelRank === -1 ? LINK_NEEDLES.length + 2 : labelRank + 1, url: other });
   }
   ranked.sort((left, right) => left.rank - right.rank);
   return ranked[0]?.url || "";
@@ -977,7 +993,7 @@ function factFor(profile, key) {
 
 function dealSite(row, definitions, mapsLink) {
   for (const entry of linkEntries(row, definitions)) {
-    const site = extractHttpUrls(row?.[entry.name]).filter(usableProfileUrl).find((url) => url !== mapsLink && !isMapsUrl(url));
+    const site = extractHttpUrls(row?.[entry.name]).filter(usableProfileUrl).find((url) => url !== mapsLink && !isMapsUrl(url) && !isDiskUrl(url));
     if (site) return site;
   }
   return "";

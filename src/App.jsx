@@ -207,50 +207,36 @@ function DealDetail({ section, deal, onBack }) {
           {talk.length > 0 ? (
             <p className="talk-line">{talk.map(([label, value]) => `${label}: ${value}`).join(". ")}.</p>
           ) : null}
-          <div className="table-scroll">
-          <table className="work-table">
-            <caption>Что страдает по регламенту. Сверка каждый час: сделка, Карты и переписка.</caption>
-            <thead>
-              <tr>
-                <th>Где застряло</th>
-                <th>Сделано</th>
-                <th>Чего нет</th>
-                <th>Что сказать менеджеру</th>
-                <th>Почему отстали</th>
-              </tr>
-            </thead>
-            <tbody>
+          <section className="panel" aria-label="Чек-лист">
+            <h3>Чек-лист</h3>
+            <ul className="status-checks">
               {report.map((item) => {
                 const key = `report:${item.title}`;
                 const opened = openProof === key;
                 const proven = item.status === "Сделано" && item.proof;
                 return (
-                  <tr key={item.title}>
-                    <td>{item.stuck || noData}</td>
-                    <td className="done-cell">
-                      {item.state ? <Mark closed={item.state === "closed"} /> : null}
-                      {proven ? (
-                        <button
-                          type="button"
-                          className="done-button"
-                          aria-expanded={opened}
-                          onClick={() => setOpenProof(opened ? "" : key)}
-                        >
-                          Сделано
-                        </button>
-                      ) : null}
-                      {item.status === "Не сделано" ? <span className="miss-button">Не сделано</span> : null}
-                      {opened ? <p className="proof-line">{item.proof}</p> : null}
-                    </td>
-                    <td>{item.missing || noData}</td>
-                    <td>{item.say || noData}</td>
-                    <td>{item.why || noData}</td>
-                  </tr>
+                  <li key={item.title}>
+                    <Mark closed={item.status === "Сделано"} />
+                    <span className="check-title">{item.title}</span>
+                    {proven ? (
+                      <button
+                        type="button"
+                        className="done-button"
+                        aria-expanded={opened}
+                        onClick={() => setOpenProof(opened ? "" : key)}
+                      >
+                        Сделано
+                      </button>
+                    ) : null}
+                    {item.status === "Не сделано" ? <span className="miss-button">Не сделано</span> : null}
+                    {!proven && item.status !== "Не сделано" ? <span className="pill">{noData}</span> : null}
+                    {opened ? <p className="proof-line">{item.proof}</p> : null}
+                    {item.status === "Не сделано" && item.missing ? <p className="check-note">{item.missing}</p> : null}
+                  </li>
                 );
               })}
-            </tbody>
-          </table>
-          </div>
+            </ul>
+          </section>
         </>
       ) : null}
       {stageNote && report ? <p className="stage-line">{stageNote}</p> : null}
