@@ -193,10 +193,19 @@ async function postResult(fetchImpl, endpoint, body) {
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(8000),
     });
-    if (!response?.ok) return { ok: false, result: null };
-    const payload = typeof response.json === "function" ? await response.json() : null;
-    if (!payload || typeof payload !== "object" || payload.error) return { ok: false, result: null };
-    return { ok: true, result: payload.result ?? null, next: payload.next };
+    let payload = null;
+    if (response && typeof response.json === "function") {
+      try {
+        payload = await response.json();
+      } catch {
+        payload = null;
+      }
+    }
+    const error = field(payload?.error);
+    if (!response?.ok || !payload || typeof payload !== "object" || error) {
+      return { ok: false, result: null, error };
+    }
+    return { ok: true, result: payload.result ?? null, next: payload.next, error: "" };
   } catch {
     return { ok: false, result: null };
   }
@@ -846,6 +855,36 @@ function goodsInCard(card) {
   return total > 0 ? total : null;
 }
 
+function showcasePrice(price) {
+  if (!price || typeof price !== "object") return "";
+  if (Number(price.value) === 1 && field(price.currency).toUpperCase() === "RUB") return "1 ₽";
+  return field(price.text);
+}
+
+function newsTitle(item) {
+  const raw = field(item?.contentShort || item?.text || item?.title);
+  if (!raw) return "";
+  const split = raw.split(/\s{2,}/);
+  return (split[0] || raw).replace(/\s+/g, " ").trim();
+}
+
+function moscowLongDay(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 1000000000000) return "";
+  return new Intl.DateTimeFormat("ru-RU", {
+    timeZone: "Europe/Moscow",
+    day: "numeric",
+    month: "long",
+  }).format(new Date(number));
+}
+
+function shownAddress(fromDeal, fromMaps) {
+  const maps = field(fromMaps);
+  const deal = field(fromDeal);
+  if (/,\s*(улица|ул\.|проспект|переулок|шоссе|площадь)/i.test(maps)) return maps;
+  return deal || maps;
+}
+
 function tabCount(source, label) {
   const match = source.match(new RegExp(`aria-label="${label}([^"]*)"`, "i"));
   if (!match) return null;
@@ -898,10 +937,30 @@ export function parseMapsProfile(html) {
   const newsTab = tabCount(source, "Новости");
   const storiesTab = tabCount(source, "Истории");
   const goodsListed = goodsInCard(card);
+  const productRows = Array.isArray(card?.advert?.products) ? card.advert.products : [];
+  const goodsNames = productRows.map((item) => field(item?.title)).filter(Boolean);
+  const goodsPrices = productRows.map((item) => showcasePrice(item?.price)).filter(Boolean);
+  const goodsDescribed = productRows.length > 0
+    ? productRows.some((item) => field(item?.description) || field(item?.shortDescription) || field(item?.fullDescription))
+    : null;
+  const newsRows = Array.isArray(card?.eventsPreviews?.items) ? card.eventsPreviews.items : [];
+  const newsTitles = newsRows.map(newsTitle).filter(Boolean);
+  const newsDays = [...new Set(newsRows.map((item) => moscowLongDay(item?.publicationTime)).filter(Boolean))];
+  const eventCount = Number(card?.eventsPreviews?.count);
   const goodsTabPresent = /aria-label="(?:Товары|Меню)/i.test(source);
   const newsTabPresent = /aria-label="Новости/i.test(source);
-  const goods = goodsListed ?? countNear(source, "goods") ?? goodsTab ?? menuTab ?? (tabsSeen && !goodsTabPresent ? 0 : null);
-  const posts = countNear(source, "posts") ?? newsTab ?? (tabsSeen && !newsTabPresent ? 0 : null);
+  const countedGoods = countNear(source, "goods");
+  const countedPosts = countNear(source, "posts");
+  const goods = goodsNames.length
+    || goodsListed
+    || (goodsTab > 0 ? goodsTab : null)
+    || (countedGoods > 0 ? countedGoods : null)
+    || (goodsTabPresent ? null : (countedGoods === 0 || (tabsSeen && !goodsTabPresent) ? 0 : null));
+  const posts = newsTitles.length
+    || (Number.isFinite(eventCount) && eventCount > 0 ? eventCount : null)
+    || (newsTab > 0 ? newsTab : null)
+    || (countedPosts > 0 ? countedPosts : null)
+    || (newsTabPresent ? null : (countedPosts === 0 || (tabsSeen && !newsTabPresent) ? 0 : null));
   const stories = countNear(source, "stories") ?? (card && typeof card.hasStories === "boolean"
     ? (card.hasStories ? 1 : 0)
     : (tabsSeen ? (storiesTab ?? 0) : null));
@@ -928,9 +987,17 @@ export function parseMapsProfile(html) {
     photoSections: photoAlts.some((alt) => !/,\s*фото$/.test(alt)) || (!card && /"photoSections"\s*:\s*\[/.test(source)),
     externalLinks: links.length,
     goods,
-    goodsPresent: goodsTabPresent || (typeof goods === "number" && goods > 0),
+    goodsNames,
+    goodsPrices,
+    goodsDescribed,
+    goodsButton: /Посмотреть все товары и услуги/.test(source),
+    goodsPresent: goodsTabPresent || goodsNames.length > 0 || (typeof goods === "number" && goods > 0),
     posts,
-    newsPresent: newsTabPresent || (typeof posts === "number" && posts > 0),
+    newsTitles,
+    newsDate: newsDays.length === 1 ? newsDays[0] : newsDays.join(", "),
+    newsPresent: newsTabPresent || newsTitles.length > 0 || (typeof posts === "number" && posts > 0),
+    sites: links,
+    reviewReplies: sample.map((item) => field(item?.businessComment?.text).replace(/\s+/g, " ")).filter(Boolean),
     stories,
     reviews,
     reviewAnswers,
@@ -955,7 +1022,10 @@ async function fetchMapsHtml(fetchImpl, link) {
   try {
     const response = await fetchImpl(link, {
       method: "GET",
-      headers: { Accept: "text/html", "User-Agent": "Mozilla/5.0" },
+      headers: {
+        Accept: "text/html",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      },
       signal: AbortSignal.timeout(8000),
     });
     if (!response?.ok || (response.url && !allowedMapsUrl(response.url))) return null;
@@ -972,6 +1042,30 @@ async function readMapsProfile(fetchImpl, link) {
   if (!page) return null;
   const profile = parseMapsProfile(page.html);
   return profile.opened ? profile : null;
+}
+
+function goodsProof(profile) {
+  const names = Array.isArray(profile.goodsNames) ? profile.goodsNames.filter(Boolean).slice(0, 3) : [];
+  if (!names.length) {
+    if (profile.goods > 0) return `На Картах в витрине ${profile.goods} товаров.`;
+    return "На Картах есть витрина товаров.";
+  }
+  const quoted = names.map((name) => `«${name}»`).join(", ");
+  const price = Array.isArray(profile.goodsPrices) && profile.goodsPrices[0] ? `, цена ${profile.goodsPrices[0]}` : "";
+  const button = profile.goodsButton ? ", кнопка «Посмотреть все товары и услуги»" : "";
+  return `На витрине есть товары: ${quoted}${price}${button}.`;
+}
+
+function newsProof(profile) {
+  const titles = Array.isArray(profile.newsTitles) ? profile.newsTitles.filter(Boolean) : [];
+  const count = profile.posts > 0 ? profile.posts : titles.length;
+  if (!titles.length) {
+    if (count > 0) return `На Картах ${count} новостей.`;
+    return "На Картах есть новости.";
+  }
+  const shown = titles.slice(0, 2).map((title) => `«${title}»`).join(" и ");
+  const when = profile.newsDate ? ` от ${profile.newsDate}` : "";
+  return `На Картах ${count} новостей${when}, в том числе ${shown}.`;
 }
 
 function factFor(profile, key) {
@@ -1002,14 +1096,12 @@ function factFor(profile, key) {
     return { state: "no", missing: "На Картах нет внешней ссылки.", proof: "" };
   }
   if (key === "goods") {
-    if (profile.goods > 0) return { state: "yes", missing: "Нет", proof: `На Картах в витрине ${profile.goods} товаров.` };
-    if (profile.goodsPresent) return { state: "yes", missing: "Нет", proof: "На Картах есть витрина товаров." };
+    if (profile.goods > 0 || profile.goodsPresent) return { state: "yes", missing: "Нет", proof: goodsProof(profile) };
     if (profile.goods === 0) return { state: "no", missing: "На Картах нет товаров в витрине.", proof: "" };
     return { state: "unknown", missing: "", proof: "" };
   }
   if (key === "news") {
-    if (profile.posts > 0) return { state: "yes", missing: "Нет", proof: `На Картах ${profile.posts} новостей.` };
-    if (profile.newsPresent) return { state: "yes", missing: "Нет", proof: "На Картах есть новости." };
+    if (profile.posts > 0 || profile.newsPresent) return { state: "yes", missing: "Нет", proof: newsProof(profile) };
     if (profile.posts === 0) return { state: "no", missing: "На Картах нет новостей.", proof: "" };
     return { state: "unknown", missing: "", proof: "" };
   }
@@ -1130,6 +1222,7 @@ export function controlBrief({ maps, created, now, heard, replies, deal = {} }) 
         missing,
         status: NOT_DONE,
         state: "open",
+        due,
         say: `${who}: ${fact.missing}${when}`,
         why: `${late && due ? `Срок ${due} прошёл, на Картах этого нет.` : due ? "Срок ещё не вышел." : "На Картах этого нет."}${chat}${pause}`,
       };
@@ -1155,6 +1248,187 @@ export function controlBrief({ maps, created, now, heard, replies, deal = {} }) 
   });
   rows.sort((left, right) => Number(right.status === NOT_DONE) - Number(left.status === NOT_DONE));
   return rows;
+}
+
+function finishDay(created) {
+  const start = dayZeroKey(created);
+  if (!start) return "";
+  return formatDay(addDays(start, 29));
+}
+
+function orgToken(name) {
+  return field(name).toLowerCase().split(/\s+/).find((part) => part.length > 3) || "";
+}
+
+export function reviewFindings(profile, context = {}) {
+  if (!profile?.opened && !profile?.readable) return [];
+  const findings = [];
+  const finish = finishDay(context.created);
+  const org = field(profile.profileName) || "организации";
+  const token = orgToken(org);
+  const names = Array.isArray(profile.goodsNames) ? profile.goodsNames.filter(Boolean) : [];
+  const prices = Array.isArray(profile.goodsPrices) ? profile.goodsPrices.filter(Boolean) : [];
+  const placeholderPrice = prices.length > 0 && prices.every((price) => price === "1 ₽" || /^1\s*р/i.test(price));
+  if (names.length && (placeholderPrice || profile.goodsDescribed === false)) {
+    const shown = names.slice(0, 3).map((name) => `«${name}»`).join(", ");
+    findings.push({
+      place: `Витрина, ${shown}`,
+      change: `Цена стоит «${prices[0] || "1 ₽"}», полного и короткого описания нет. Поставьте цену из прайса и два описания у каждой позиции.`,
+      regulation: true,
+      deadline: finish,
+    });
+  }
+  const replies = Array.isArray(profile.reviewReplies) ? profile.reviewReplies : [];
+  const stem = token.slice(0, 5);
+  const thin = replies.find((text) => {
+    const named = stem ? text.toLowerCase().includes(stem) : false;
+    return text.length < 40 || !named;
+  });
+  if (thin) {
+    findings.push({
+      place: `Отзывы, ответ «${thin}»`,
+      change: `В ответе нет названия «${org}». Допишите, что отвечает ${org}.`,
+      regulation: true,
+      deadline: finish,
+    });
+  }
+  const alts = Array.isArray(profile.photoAlts) ? profile.photoAlts.filter(Boolean) : [];
+  if (alts.length > 0 && alts.every((alt) => /,\s*фото$/.test(alt))) {
+    const count = profile.photos || alts.length;
+    findings.push({
+      place: `Фото, ${count} кадров, подпись «${alts[0]}»`,
+      change: "Подпись одна и кончается на «фото». Снимите фасад, прилавок и товар и напишите свою подпись к каждому кадру.",
+      regulation: false,
+      deadline: finish,
+    });
+  }
+  const sites = Array.isArray(profile.sites) ? profile.sites : [];
+  const constructor = sites.find((url) => {
+    try {
+      const host = new URL(url).hostname.toLowerCase();
+      return host === "clients.site" || host.endsWith(".clients.site");
+    } catch {
+      return false;
+    }
+  });
+  if (constructor) {
+    findings.push({
+      place: `Внешняя ссылка, ${constructor}`,
+      change: "Это страница конструктора Яндекса, не сайт магазина. Сначала сделайте свой сайт, затем замените эту ссылку и подключите карточку к нему.",
+      regulation: false,
+      deadline: finish,
+    });
+  }
+  return findings;
+}
+
+export function controlMessages(job, now = new Date()) {
+  const title = field(job?.title) || "Сделка";
+  const report = Array.isArray(job?.report) ? job.report : [];
+  const findings = Array.isArray(job?.review) ? job.review : [];
+  const finish = finishDay(job?.created);
+  const start = dayZeroKey(job?.created);
+  const pmOpen = !start || now > atMoscowHour(addDays(start, 29), 18);
+  const lines = [];
+  for (const item of report) {
+    if (item?.status !== NOT_DONE) continue;
+    const fix = field(item.missing || item.say);
+    if (!fix || fix === NO_DATA) continue;
+    const deadline = field(item.due) || finish || "в чек-листе даты нет";
+    lines.push(`${title}. Шаг: ${item.title}. Срок: ${deadline}. Исправьте: ${fix}`);
+  }
+  for (const finding of findings) {
+    if (!finding?.regulation || !pmOpen) continue;
+    const place = field(finding.place);
+    const change = field(finding.change);
+    if (!place || !change) continue;
+    if (lines.some((line) => /SEO фото|Подписи фото/.test(line) && /фото/i.test(place))) continue;
+    const deadline = field(finding.deadline) || finish || "день 29";
+    lines.push(`${title}. Шаг: ${place}. Срок: ${deadline}. Исправьте: ${change}`);
+  }
+  return lines;
+}
+
+const postedChatLines = new Set();
+let controlChatId = "";
+
+export function resetControlChatState() {
+  postedChatLines.clear();
+  controlChatId = "";
+}
+
+function controlChatIdFrom(result) {
+  if (typeof result === "number" || typeof result === "string") return field(result);
+  if (result && typeof result === "object") return field(result.ID ?? result.id ?? result.CHAT_ID ?? result.chatId);
+  return "";
+}
+
+function isMaria(user) {
+  return field(user?.NAME).toLowerCase() === "мария" && field(user?.LAST_NAME).toLowerCase().startsWith("браг");
+}
+
+async function findMaria(fetchImpl, base) {
+  const listed = await postResult(fetchImpl, endpointFor(base, "user.get.json"), {
+    filter: { NAME: "Мария", LAST_NAME: "Брага", ACTIVE: true },
+  });
+  if (!listed.ok) return { id: "", missing: listed.error ? "user.get" : "" };
+  const rows = Array.isArray(listed.result) ? listed.result : [];
+  const maria = rows.find(isMaria);
+  return { id: maria ? field(maria.ID) : "", missing: "" };
+}
+
+async function ensureControlChat(fetchImpl, base, mariaId) {
+  if (controlChatId) return { id: controlChatId, missing: "" };
+  const created = await postResult(fetchImpl, endpointFor(base, "im.chat.add.json"), {
+    TYPE: "CHAT",
+    TITLE: "Система контроля",
+    USERS: [Number(mariaId) || mariaId],
+    ENTITY_TYPE: "CONTROL_SITE",
+    ENTITY_ID: `maria-${mariaId}`,
+  });
+  const id = controlChatIdFrom(created.result);
+  if (created.ok && id) {
+    controlChatId = id;
+    return { id, missing: "" };
+  }
+  return { id: "", missing: created.error ? "im.chat.add" : "" };
+}
+
+export async function deliverControlChat(fetchImpl, base, jobs, now = new Date()) {
+  const ordered = [...(Array.isArray(jobs) ? jobs : [])].sort((left, right) => Number(Boolean(right?.offer)) - Number(Boolean(left?.offer)));
+  const pending = [];
+  for (const job of ordered) {
+    for (const line of controlMessages(job, now)) {
+      const key = `${field(job?.id)}|${line}`;
+      if (postedChatLines.has(key)) continue;
+      pending.push({ key, line });
+    }
+  }
+  if (!pending.length) return { posted: 0, missing: "" };
+  const maria = await findMaria(fetchImpl, base);
+  if (!maria.id) return { posted: 0, missing: maria.missing || "" };
+  const chat = await ensureControlChat(fetchImpl, base, maria.id);
+  if (!chat.id) return { posted: 0, missing: chat.missing || "im.chat.add" };
+  const history = await postResult(fetchImpl, endpointFor(base, "im.dialog.messages.get.json"), {
+    DIALOG_ID: `chat${chat.id}`,
+    LIMIT: 100,
+  });
+  const seen = new Set(messageList(history.result).map((row) => messageText(row)));
+  let posted = 0;
+  for (const item of pending) {
+    if (seen.has(messageText({ text: item.line }))) {
+      postedChatLines.add(item.key);
+      continue;
+    }
+    const sent = await postResult(fetchImpl, endpointFor(base, "im.message.add.json"), {
+      DIALOG_ID: `chat${chat.id}`,
+      MESSAGE: item.line,
+    });
+    if (!sent.ok) return { posted, missing: sent.error ? "im.message.add" : "" };
+    postedChatLines.add(item.key);
+    posted += 1;
+  }
+  return { posted, missing: "" };
 }
 
 export function managerRows(items, created, now) {
@@ -1678,6 +1952,7 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
     const people = usersById(users.result);
 
     const built = new Map();
+    const chatJobs = [];
     const rank = (title) => {
       if (offerForDeal(title)) return 0;
       if (isNamedDeal(title)) return 1;
@@ -1733,7 +2008,7 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
       const profileLink = mapsLinkForDeal(row?.TITLE, dealProfileLink(row, fields) || firstValue(row, linkFields));
       const maps = named && heavy ? await readMapsProfile(fetchImpl, profileLink) : null;
       const site = named ? dealSite(row, fields, profileLink) : "";
-      const address = dealAddress(row, addressFields) || maps?.addressText || "";
+      const address = shownAddress(dealAddress(row, addressFields), maps?.addressText);
       const report = named ? controlBrief({
         maps,
         created: row?.DATE_CREATE,
@@ -1742,6 +2017,17 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
         replies: talk?.replies,
         deal: { address, site, link: profileLink, assignee: people.get(assigneeId) || "" },
       }) : null;
+      const review = named && maps ? reviewFindings(maps, { created: row?.DATE_CREATE, now }) : [];
+      if (named && report) {
+        chatJobs.push({
+          id: field(row?.ID),
+          title: organizationName(row?.TITLE),
+          created: row?.DATE_CREATE,
+          report,
+          review,
+          offer: Boolean(offerForDeal(row?.TITLE)),
+        });
+      }
       built.set(field(row?.ID), {
         id: field(row?.ID),
         title: organizationName(row?.TITLE),
@@ -1757,6 +2043,7 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
         ...(proof ? { pilot: true, late, stageFit, checklist, dialog: talk } : {}),
         ...(offerForDeal(row?.TITLE) ? { offer: "/kp-rakovy-dvor.html" } : {}),
         ...(report ? { report } : {}),
+        ...(review.length ? { review } : {}),
         marks,
         checks: (proof ? PILOT_CHECKS : STARTER_CHECKS).map((check) => {
           const mark = marks[check.code];
@@ -1794,7 +2081,17 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
       if (deal && !deals.some((existing) => existing.id === deal.id)) deals.push(deal);
     }
     deals.sort((left, right) => Number(isProofClient(right.title)) - Number(isProofClient(left.title)));
-    return { connected: true, deals };
+    let chat = { posted: 0, missing: "" };
+    try {
+      chat = await deliverControlChat(fetchImpl, base, chatJobs, now);
+    } catch {
+      chat = { posted: 0, missing: "" };
+    }
+    return {
+      connected: true,
+      deals,
+      ...(chat.missing ? { chat: { posted: chat.posted, missing: chat.missing } } : {}),
+    };
   } catch {
     return { connected: false, unavailable: true, deals: [] };
   }

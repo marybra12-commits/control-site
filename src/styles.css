@@ -576,6 +576,58 @@ dd {
   font-size: 14px;
 }
 
+.stage-switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0 0;
+}
+
+.stage-switch button {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 8px 14px;
+}
+
+.stage-switch button[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.review-panel {
+  margin-top: 16px;
+}
+
+.review-thread {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.review-thread li + li {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.review-place {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.review-change {
+  margin: 4px 0 0;
+  font-size: 14px;
+}
+
 .offer-line {
   margin: 16px 0 0;
 }

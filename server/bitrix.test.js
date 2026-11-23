@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { acceptanceStatus, controlBrief, loadOformlenieDeals, organizationName, parseMapsProfile, pipelineSection, readDialog, webhookConfigured } from "./bitrix.js";
+import { acceptanceStatus, controlBrief, controlMessages, deliverControlChat, loadOformlenieDeals, organizationName, parseMapsProfile, pipelineSection, readDialog, resetControlChatState, reviewFindings, webhookConfigured } from "./bitrix.js";
 
 test("missing or blank webhook stays disconnected and does not call Bitrix", async () => {
   assert.equal(webhookConfigured({}), false);
@@ -580,4 +580,138 @@ test("a failed read does not surface the endpoint", async () => {
 
   assert.deepEqual(result, { connected: false, unavailable: true, deals: [] });
   assert.equal(JSON.stringify(result).includes("http"), false);
+});
+
+test("the live storefront and news stay done and the review names the remaining places", () => {
+  const html = `<script type="application/json" class="state-view">${JSON.stringify({
+    stack: [{ response: { items: [{
+      shortTitle: "Раковый двор",
+      fullAddress: "Ростов-на-Дону, улица Александра Бондарева, 6",
+      coordinates: [39.804647, 47.247066],
+      entrances: [],
+      photos: { count: 23, items: [{ alt: "Рыба и морепродукты Раковый двор, Ростов-на-Дону, фото" }] },
+      urls: ["https://rakovyj-dvor-ulitsa-aleksandra-bondareva.clients.site/"],
+      hasStories: true,
+      ratingData: { reviewCount: 10 },
+      advert: { products: [
+        { title: "Раки гиганты", price: { text: "1 р.", value: 1, currency: "RUB" } },
+        { title: "Раки крупные", price: { text: "1 р.", value: 1, currency: "RUB" } },
+        { title: "Раки средне-крупные", price: { text: "1 р.", value: 1, currency: "RUB" } },
+      ] },
+      eventsPreviews: {
+        count: 5,
+        items: [
+          { publicationTime: 1793874674218, text: "Что выбрать к пенному? Секреты удачных сочетаний напитков и закусок  Хорошо подобранная закуска" },
+          { publicationTime: 1793874630612, text: "Морепродукты: как превратить обычный ужин в гастрономический вечер  Для маленького праздника" },
+        ],
+      },
+      reviewResults: { reviews: [
+        { businessComment: { text: "Будем рады снова видеть вас в «Раковом дворе»." } },
+        { businessComment: { text: "Благодарим за ваш отзыв" } },
+      ] },
+    }] } }],
+  })}</script>Посмотреть все товары и услуги`;
+  const profile = parseMapsProfile(html);
+  const rows = controlBrief({
+    maps: profile,
+    created: "2026-10-09T10:00:00+03:00",
+    now: new Date("2026-11-23T12:00:00+03:00"),
+    heard: {},
+    deal: { assignee: "Лиана", link: "https://yandex.ru/maps/-/CXSSVWPY" },
+  });
+  const goods = rows.find((item) => item.title === "Товары в витрине");
+  const news = rows.find((item) => item.title === "Новости");
+  assert.equal(profile.addressText, "Ростов-на-Дону, улица Александра Бондарева, 6");
+  assert.equal(goods.status, "Сделано");
+  assert.equal(news.status, "Сделано");
+  assert.equal(goods.proof.includes("Раки гиганты"), true);
+  assert.equal(goods.proof.includes("Раки крупные"), true);
+  assert.equal(goods.proof.includes("Раки средне-крупные"), true);
+  assert.equal(goods.proof.includes("1 ₽"), true);
+  assert.equal(goods.proof.includes("Посмотреть все товары и услуги"), true);
+  assert.equal(news.proof.includes("5"), true);
+  assert.equal(news.proof.includes("5 ноября"), true);
+  assert.equal(news.proof.includes("Что выбрать к пенному?"), true);
+  assert.equal(news.proof.includes("Морепродукты: как превратить обычный ужин в гастрономический вечер"), true);
+  assert.equal(rows.some((item) => item.status === "Не сделано" && /нет товаров|нет новостей/.test(item.missing || "")), false);
+  const review = reviewFindings(profile, { created: "2026-10-09T10:00:00+03:00", now: new Date("2026-11-23T12:00:00+03:00") });
+  assert.equal(JSON.stringify(review).includes("Нет данных"), false);
+  assert.equal(review.some((item) => item.place.includes("Раки гиганты") && item.change.includes("1 ₽")), true);
+  assert.equal(review.some((item) => item.place.includes("Благодарим за ваш отзыв") && item.change.includes("Раковый двор")), true);
+  assert.equal(review.some((item) => item.place.includes("clients.site") && item.change.includes("свой сайт")), true);
+  assert.equal(review.some((item) => item.place.includes("фото") && item.change.includes("подпись")), true);
+  const lines = controlMessages({
+    title: "Автосделка Раковой Двор Оформление+3Д",
+    created: "2026-10-09T10:00:00+03:00",
+    report: rows,
+    review,
+  }, new Date("2026-11-23T12:00:00+03:00"));
+  assert.equal(lines[0].startsWith("Автосделка Раковой Двор Оформление+3Д. Шаг:"), true);
+  assert.equal(lines.some((line) => /нет товаров|нет новостей/.test(line)), false);
+  assert.equal(lines.some((line) => line.includes("Шаг: SEO фото") && line.includes("Исправьте:")), true);
+  assert.equal(lines.some((line) => line.includes("Раки гиганты") && line.includes("Срок:")), true);
+  assert.equal(lines.some((line) => line.includes("Благодарим за ваш отзыв")), true);
+});
+
+test("a control chat is only with Maria and names the missing method", async () => {
+  resetControlChatState();
+  const calls = [];
+  const missing = await deliverControlChat(
+    async (url, options) => {
+      calls.push({ url: String(url), body: JSON.parse(options.body || "{}") });
+      const method = String(url).split("/").pop();
+      if (method === "user.get.json") {
+        return { ok: true, async json() { return { result: [{ ID: "3", NAME: "Мария", LAST_NAME: "Брага" }, { ID: "4", NAME: "Анна", LAST_NAME: "Смирнова" }] }; } };
+      }
+      if (method === "im.chat.add.json") {
+        return { ok: true, async json() { return { error: "ERROR_METHOD_NOT_FOUND" }; } };
+      }
+      return { ok: true, async json() { return { result: 1 }; } };
+    },
+    "https://example.invalid/rest/1/placeholder/",
+    [{
+      id: "31",
+      title: "Автосделка Раковой Двор Оформление+3Д",
+      offer: true,
+      created: "2026-10-09T10:00:00+03:00",
+      report: [{ title: "SEO фото", status: "Не сделано", missing: "Подписи фото на Картах шаблонные, это не SEO.", due: "" }],
+      review: [],
+    }],
+    new Date("2026-11-23T12:00:00+03:00"),
+  );
+  assert.equal(missing.missing, "im.chat.add");
+  assert.equal(missing.posted, 0);
+  assert.equal(JSON.stringify(missing).includes("placeholder"), false);
+  assert.equal(calls.some((call) => call.url.endsWith("/im.message.add.json")), false);
+  const users = calls.find((call) => call.url.endsWith("/im.chat.add.json")).body.USERS;
+  assert.deepEqual(users, [3]);
+
+  resetControlChatState();
+  const sent = [];
+  const posted = await deliverControlChat(
+    async (url, options) => {
+      const method = String(url).split("/").pop();
+      const body = JSON.parse(options.body || "{}");
+      if (method === "user.get.json") {
+        return { ok: true, async json() { return { result: [{ ID: "3", NAME: "Мария", LAST_NAME: "Брага" }] }; } };
+      }
+      if (method === "im.chat.add.json") {
+        return { ok: true, async json() { return { result: 15 }; } };
+      }
+      if (method === "im.message.add.json") sent.push(body);
+      return { ok: true, async json() { return { result: 100 }; } };
+    },
+    "https://example.invalid/rest/1/placeholder/",
+    [
+      { id: "7", title: "Другая сделка", offer: false, report: [{ title: "Новости", status: "Не сделано", missing: "На Картах нет новостей.", due: "29.10.2026" }], review: [] },
+      { id: "31", title: "Автосделка Раковой Двор Оформление+3Д", offer: true, created: "2026-10-09T10:00:00+03:00", report: [{ title: "SEO фото", status: "Не сделано", missing: "Подписи фото на Картах шаблонные, это не SEO." }], review: [] },
+    ],
+    new Date("2026-11-23T12:00:00+03:00"),
+  );
+  assert.equal(posted.missing, "");
+  assert.equal(posted.posted, 2);
+  assert.equal(sent[0].DIALOG_ID, "chat15");
+  assert.equal(sent[0].MESSAGE.startsWith("Автосделка Раковой Двор Оформление+3Д. Шаг: SEO фото."), true);
+  assert.equal(sent[0].MESSAGE.includes("нет новостей"), false);
+  assert.equal(sent[1].MESSAGE.startsWith("Другая сделка. Шаг: Новости."), true);
 });

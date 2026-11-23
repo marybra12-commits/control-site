@@ -31,6 +31,22 @@ function dealKey(deal, index) {
   return deal.id || `deal-${index}`;
 }
 
+function readStage(key) {
+  try {
+    return localStorage.getItem(key) === "review" ? "review" : "work";
+  } catch {
+    return "work";
+  }
+}
+
+function keepStage(key, stage) {
+  try {
+    localStorage.setItem(key, stage);
+  } catch {
+    // The button still switches the open card.
+  }
+}
+
 function dealsForSection(section, deals) {
   if (section.id === "reklama" || section.id === "otzyvy") return [];
   if (section.funnel) return deals.filter((deal) => deal.funnel === section.funnel);
@@ -142,6 +158,13 @@ function stageProblem(deal) {
 function DealDetail({ section, deal, onBack }) {
   const checks = checklist(section, deal);
   const [openProof, setOpenProof] = useState("");
+  const stageKey = `control-stage:${deal.id || deal.title || "deal"}`;
+  const [workStage, setWorkStage] = useState(() => readStage(stageKey));
+  useEffect(() => {
+    setWorkStage(readStage(stageKey));
+  }, [stageKey]);
+  const oformlenie = deal.funnel === "oformlenie" || section?.funnel === "oformlenie";
+  const review = Array.isArray(deal.review) ? deal.review : [];
   const late = deal.pilot && deal.late && typeof deal.late === "object" ? deal.late : {};
   const rows = checks.map((check) => ({
     ...check,
@@ -168,6 +191,47 @@ function DealDetail({ section, deal, onBack }) {
     <article className="card deal">
       <button type="button" className="back" onClick={onBack}>К списку</button>
       <h2 className="deal-title">{deal.title || "Без названия"}</h2>
+      {oformlenie ? (
+        <div className="stage-switch" role="group" aria-label="Стадия сделки">
+          <button
+            type="button"
+            aria-pressed={workStage === "work"}
+            onClick={() => {
+              setWorkStage("work");
+              keepStage(stageKey, "work");
+            }}
+          >
+            Работа ведётся
+          </button>
+          <button
+            type="button"
+            aria-pressed={workStage === "review"}
+            onClick={() => {
+              setWorkStage("review");
+              keepStage(stageKey, "review");
+            }}
+          >
+            Перешёл на проверку
+          </button>
+        </div>
+      ) : null}
+      {oformlenie && workStage === "review" ? (
+        <section className="panel review-panel" aria-label="Проверка">
+          <h3>Проверка</h3>
+          {review.length > 0 ? (
+            <ol className="review-thread">
+              {review.map((item) => (
+                <li key={item.place}>
+                  <p className="review-place">{item.place}</p>
+                  <p className="review-change">{item.change}</p>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="review-change">По этой карточке список правок пуст.</p>
+          )}
+        </section>
+      ) : null}
       <dl className="deal-meta">
         <div>
           <dt>Период</dt>
