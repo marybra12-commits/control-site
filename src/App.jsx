@@ -223,7 +223,8 @@ function DealDetail({ section, deal, onBack }) {
               {review.map((item) => (
                 <li key={item.place}>
                   <p className="review-place">{item.place}</p>
-                  <p className="review-change">{item.change}</p>
+                  {item.wrong ? <p className="review-change">Сейчас: {item.wrong}</p> : null}
+                  <p className="review-change">Замените: {item.change}</p>
                 </li>
               ))}
             </ol>

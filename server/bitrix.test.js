@@ -636,10 +636,11 @@ test("the live storefront and news stay done and the review names the remaining 
   assert.equal(rows.some((item) => item.status === "Не сделано" && /нет товаров|нет новостей/.test(item.missing || "")), false);
   const review = reviewFindings(profile, { created: "2026-10-09T10:00:00+03:00", now: new Date("2026-11-23T12:00:00+03:00") });
   assert.equal(JSON.stringify(review).includes("Нет данных"), false);
-  assert.equal(review.some((item) => item.place.includes("Раки гиганты") && item.change.includes("1 ₽")), true);
-  assert.equal(review.some((item) => item.place.includes("Благодарим за ваш отзыв") && item.change.includes("Раковый двор")), true);
-  assert.equal(review.some((item) => item.place.includes("clients.site") && item.change.includes("свой сайт")), true);
-  assert.equal(review.some((item) => item.place.includes("фото") && item.change.includes("подпись")), true);
+  assert.equal(review.some((item) => item.place.includes("Раки гиганты") && item.wrong === "1 ₽" && item.change.includes("прайса")), true);
+  assert.equal(review.some((item) => item.place.includes("23") && item.wrong.includes("фото") && item.change.includes("что на нём снято")), true);
+  assert.equal(JSON.stringify(review).includes("Rakoviy"), false);
+  assert.equal(JSON.stringify(review).includes("свой сайт"), false);
+  assert.equal(JSON.stringify(review).includes("Благодарим"), false);
   const lines = controlMessages({
     title: "Автосделка Раковой Двор Оформление+3Д",
     created: "2026-10-09T10:00:00+03:00",
@@ -650,7 +651,7 @@ test("the live storefront and news stay done and the review names the remaining 
   assert.equal(lines.some((line) => /нет товаров|нет новостей/.test(line)), false);
   assert.equal(lines.some((line) => line.includes("Шаг: SEO фото") && line.includes("Исправьте:")), true);
   assert.equal(lines.some((line) => line.includes("Раки гиганты") && line.includes("Срок:")), true);
-  assert.equal(lines.some((line) => line.includes("Благодарим за ваш отзыв")), true);
+  assert.equal(lines.some((line) => /Rakoviy|свой сайт|Благодарим/.test(line)), false);
 });
 
 test("a control chat is only with Maria and names the missing method", async () => {

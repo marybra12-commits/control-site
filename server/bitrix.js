@@ -1024,6 +1024,7 @@ async function fetchMapsHtml(fetchImpl, link) {
       method: "GET",
       headers: {
         Accept: "text/html",
+        "Accept-Language": "ru-RU,ru;q=0.9",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
       },
       signal: AbortSignal.timeout(8000),
@@ -1127,7 +1128,7 @@ function factFor(profile, key) {
     return { state: "unknown", missing: "", proof: "" };
   }
   if (key === "seo") {
-    const template = profile.photoAlts.length > 0 && profile.photoAlts.every((alt) => /,\s*фото$/.test(alt));
+    const template = profile.photoAlts.length > 0 && profile.photoAlts.every(templateCaption);
     if (profile.alts > 0 && !template) return { state: "yes", missing: "Нет", proof: "У фото на Картах есть свои подписи." };
     if (template) return { state: "no", missing: "Подписи фото на Картах шаблонные, это не SEO.", proof: "" };
     if ((profile.images > 0 || profile.photos > 0) && profile.alts === 0) return { state: "no", missing: "У фото на Картах нет подписей.", proof: "" };
@@ -1256,65 +1257,34 @@ function finishDay(created) {
   return formatDay(addDays(start, 29));
 }
 
-function orgToken(name) {
-  return field(name).toLowerCase().split(/\s+/).find((part) => part.length > 3) || "";
+function templateCaption(alt) {
+  return /,\s*(фото|photo)$/i.test(field(alt));
 }
 
 export function reviewFindings(profile, context = {}) {
   if (!profile?.opened && !profile?.readable) return [];
   const findings = [];
   const finish = finishDay(context.created);
-  const org = field(profile.profileName) || "организации";
-  const token = orgToken(org);
   const names = Array.isArray(profile.goodsNames) ? profile.goodsNames.filter(Boolean) : [];
   const prices = Array.isArray(profile.goodsPrices) ? profile.goodsPrices.filter(Boolean) : [];
   const placeholderPrice = prices.length > 0 && prices.every((price) => price === "1 ₽" || /^1\s*р/i.test(price));
-  if (names.length && (placeholderPrice || profile.goodsDescribed === false)) {
+  if (names.length && placeholderPrice && profile.goodsDescribed !== true) {
     const shown = names.slice(0, 3).map((name) => `«${name}»`).join(", ");
     findings.push({
       place: `Витрина, ${shown}`,
-      change: `Цена стоит «${prices[0] || "1 ₽"}», полного и короткого описания нет. Поставьте цену из прайса и два описания у каждой позиции.`,
-      regulation: true,
-      deadline: finish,
-    });
-  }
-  const replies = Array.isArray(profile.reviewReplies) ? profile.reviewReplies : [];
-  const stem = token.slice(0, 5);
-  const thin = replies.find((text) => {
-    const named = stem ? text.toLowerCase().includes(stem) : false;
-    return text.length < 40 || !named;
-  });
-  if (thin) {
-    findings.push({
-      place: `Отзывы, ответ «${thin}»`,
-      change: `В ответе нет названия «${org}». Допишите, что отвечает ${org}.`,
+      wrong: "1 ₽",
+      change: "Цена из прайса. Полное описание и короткое описание у этой позиции.",
       regulation: true,
       deadline: finish,
     });
   }
   const alts = Array.isArray(profile.photoAlts) ? profile.photoAlts.filter(Boolean) : [];
-  if (alts.length > 0 && alts.every((alt) => /,\s*фото$/.test(alt))) {
+  if (alts.length > 0 && alts.every(templateCaption)) {
     const count = profile.photos || alts.length;
     findings.push({
-      place: `Фото, ${count} кадров, подпись «${alts[0]}»`,
-      change: "Подпись одна и кончается на «фото». Снимите фасад, прилавок и товар и напишите свою подпись к каждому кадру.",
-      regulation: false,
-      deadline: finish,
-    });
-  }
-  const sites = Array.isArray(profile.sites) ? profile.sites : [];
-  const constructor = sites.find((url) => {
-    try {
-      const host = new URL(url).hostname.toLowerCase();
-      return host === "clients.site" || host.endsWith(".clients.site");
-    } catch {
-      return false;
-    }
-  });
-  if (constructor) {
-    findings.push({
-      place: `Внешняя ссылка, ${constructor}`,
-      change: "Это страница конструктора Яндекса, не сайт магазина. Сначала сделайте свой сайт, затем замените эту ссылку и подключите карточку к нему.",
+      place: `Фото, ${count} кадров`,
+      wrong: alts[0],
+      change: "Подпись этого кадра: что на нём снято, своими словами.",
       regulation: false,
       deadline: finish,
     });
