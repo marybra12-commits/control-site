@@ -1017,8 +1017,16 @@ function allowedMapsUrl(value) {
   }
 }
 
+const HOUR_MS = 60 * 60 * 1000;
+const mapsCache = new Map();
+let hourCacheOn = false;
+
 async function fetchMapsHtml(fetchImpl, link) {
   if (!allowedMapsUrl(link)) return null;
+  if (hourCacheOn) {
+    const hit = mapsCache.get(link);
+    if (hit && Date.now() - hit.at < HOUR_MS) return hit.page;
+  }
   try {
     const response = await fetchImpl(link, {
       method: "GET",
@@ -1032,7 +1040,9 @@ async function fetchMapsHtml(fetchImpl, link) {
     if (!response?.ok || (response.url && !allowedMapsUrl(response.url))) return null;
     const html = typeof response.text === "function" ? await response.text() : "";
     if (!html) return null;
-    return { html, finalUrl: response.url || link };
+    const page = { html, finalUrl: response.url || link };
+    if (hourCacheOn) mapsCache.set(link, { at: Date.now(), page });
+    return page;
   } catch {
     return null;
   }
@@ -1306,13 +1316,14 @@ export function controlMessages(job, now = new Date()) {
     if (item?.status !== NOT_DONE) continue;
     const fix = field(item.missing || item.say);
     if (!fix || fix === NO_DATA) continue;
-    if (item.title === "SEO фото" && isRakovDeal(title) && /не SEO/.test(fix)) continue;
+    if (item.title === "SEO фото" && isRakovDeal(title)) continue;
     const deadline = field(item.due) || finish || "в чек-листе даты нет";
     lines.push(`${title}. Шаг: ${item.title}. Срок: ${deadline}. Исправьте: ${fix}`);
   }
   for (const finding of findings) {
     if (!finding?.regulation || !pmOpen) continue;
     const place = field(finding.place);
+    if (place.startsWith("Видимая подпись")) continue;
     const change = field(finding.change);
     if (!place || !change) continue;
     if (lines.some((line) => /SEO фото|Подписи фото/.test(line) && /фото/i.test(place))) continue;
@@ -1322,14 +1333,30 @@ export function controlMessages(job, now = new Date()) {
   return lines;
 }
 
-const postedChatLines = new Set();
+const postedSteps = new Set();
+const postedMessages = new Set();
 const postedComments = new Set();
 let controlChatId = "";
+const dealCache = new Map();
 
 export function resetControlChatState() {
-  postedChatLines.clear();
+  postedSteps.clear();
+  postedMessages.clear();
   postedComments.clear();
   controlChatId = "";
+  mapsCache.clear();
+  dealCache.clear();
+  hourCacheOn = false;
+  inflightLoad = null;
+}
+
+function stuckStep(line) {
+  const match = String(line).match(/Шаг:\s*(.+?)\.\s*Срок:/);
+  return match ? match[1].trim() : String(line).trim();
+}
+
+function stepNeedle(step) {
+  return messageText({ text: `Шаг: ${step}.` });
 }
 
 function controlChatIdFrom(result) {
@@ -1374,8 +1401,6 @@ function commentText(row) {
 }
 
 async function postDealComment(fetchImpl, base, dealId, line) {
-  const key = `${dealId}|${line}`;
-  if (postedComments.has(key)) return "";
   const sent = await postResult(fetchImpl, endpointFor(base, "crm.timeline.comment.add.json"), {
     fields: {
       ENTITY_ID: Number(dealId) || dealId,
@@ -1383,9 +1408,18 @@ async function postDealComment(fetchImpl, base, dealId, line) {
       COMMENT: line,
     },
   });
-  if (!sent.ok) return sent.error ? "crm.timeline.comment.add" : "";
-  postedComments.add(key);
-  return "";
+  return sent.ok ? "" : (sent.error ? "crm.timeline.comment.add" : "");
+}
+
+async function commentArchive(fetchImpl, base, dealId) {
+  const listed = await postResult(fetchImpl, endpointFor(base, "crm.timeline.comment.list.json"), {
+    filter: { ENTITY_ID: dealId, ENTITY_TYPE: "deal" },
+  });
+  const rows = Array.isArray(listed.result)
+    ? listed.result
+    : (Array.isArray(listed.result?.items) ? listed.result.items : null);
+  if (!rows) return null;
+  return rows.map(commentText).join("\n");
 }
 
 export async function deliverControlChat(fetchImpl, base, jobs, now = new Date()) {
@@ -1393,8 +1427,10 @@ export async function deliverControlChat(fetchImpl, base, jobs, now = new Date()
   const pending = [];
   for (const job of ordered) {
     for (const line of controlMessages(job, now)) {
-      const key = `${field(job?.id)}|${line}`;
-      pending.push({ key, id: field(job?.id), line });
+      const step = stuckStep(line);
+      const key = `${field(job?.id)}|${step}`;
+      if (postedSteps.has(key)) continue;
+      pending.push({ key, id: field(job?.id), line, step });
     }
   }
   if (!pending.length) return { posted: 0, missing: "" };
@@ -1414,27 +1450,35 @@ export async function deliverControlChat(fetchImpl, base, jobs, now = new Date()
     });
     for (const row of messageList(history.result)) seen.add(messageText(row));
   }
+  const archives = new Map();
   let posted = 0;
   for (const item of pending) {
-    if (!postedChatLines.has(item.key)) {
-      if (!chat.id) {
-        // The chat method is already recorded. The deal comment still goes out.
-      } else if (seen.has(messageText({ text: item.line }))) {
-        postedChatLines.add(item.key);
-      } else {
-        const sent = await postResult(fetchImpl, endpointFor(base, "im.message.add.json"), {
-          DIALOG_ID: `chat${chat.id}`,
-          MESSAGE: item.line,
-        });
-        if (!sent.ok) note(sent.error ? "im.message.add" : "");
-        else {
-          postedChatLines.add(item.key);
-          seen.add(messageText({ text: item.line }));
-          posted += 1;
-        }
+    const needle = stepNeedle(item.step);
+    const chatHas = postedMessages.has(item.key) || [...seen].some((text) => text.includes(needle));
+    if (!archives.has(item.id)) archives.set(item.id, item.id ? await commentArchive(fetchImpl, base, item.id) : "");
+    const archive = archives.get(item.id);
+    const commentRecorded = archive == null ? chatHas : archive.includes(needle);
+    const commentHas = postedComments.has(item.key) || commentRecorded;
+    if (!chatHas && chat.id) {
+      const sent = await postResult(fetchImpl, endpointFor(base, "im.message.add.json"), {
+        DIALOG_ID: `chat${chat.id}`,
+        MESSAGE: item.line,
+      });
+      if (!sent.ok) note(sent.error ? "im.message.add" : "");
+      else {
+        postedMessages.add(item.key);
+        seen.add(messageText({ text: item.line }));
+        posted += 1;
       }
     }
-    if (item.id) note(await postDealComment(fetchImpl, base, item.id, item.line));
+    if (!commentHas && item.id) {
+      const missing = await postDealComment(fetchImpl, base, item.id, item.line);
+      if (missing) note(missing);
+      else postedComments.add(item.key);
+    }
+    const messageSettled = chatHas || postedMessages.has(item.key) || !chat.id;
+    const commentSettled = commentHas || postedComments.has(item.key) || !item.id;
+    if (messageSettled && commentSettled) postedSteps.add(item.key);
   }
   return { posted, missing: failures.join(", ") };
 }
@@ -1863,12 +1907,39 @@ async function findNamedDeals(fetchImpl, base, select) {
   return [];
 }
 
+let inflightLoad = null;
+
 export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch, now = new Date()) {
+  if (!webhookConfigured(env)) {
+    return { connected: false, deals: [] };
+  }
+  const base = env[WEBHOOK_ENV].trim();
+  hourCacheOn = hourCacheAllowed(base);
+  if (hourCacheOn) {
+    const hit = dealCache.get(base);
+    if (hit && Date.now() - hit.at < HOUR_MS) return hit.body;
+    if (inflightLoad?.base === base) return inflightLoad.promise;
+  }
+  const promise = loadOformlenieDealsNow(env, fetchImpl, now);
+  if (!hourCacheOn) return promise;
+  inflightLoad = { base, promise };
+  promise.finally(() => {
+    if (inflightLoad?.promise === promise) inflightLoad = null;
+  });
+  return promise;
+}
+
+async function loadOformlenieDealsNow(env = serviceEnv(), fetchImpl = fetch, now = new Date()) {
   if (!webhookConfigured(env)) {
     return { connected: false, deals: [] };
   }
 
   const base = env[WEBHOOK_ENV].trim();
+  hourCacheOn = hourCacheAllowed(base);
+  if (hourCacheOn) {
+    const hit = dealCache.get(base);
+    if (hit && Date.now() - hit.at < HOUR_MS) return hit.body;
+  }
 
   try {
     const started = Date.now();
@@ -2095,12 +2166,23 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
     } catch {
       chat = { posted: 0, missing: "" };
     }
-    return {
+    const body = {
       connected: true,
       deals,
       ...(chat.missing ? { chat: { posted: chat.posted, missing: chat.missing } } : {}),
     };
+    if (hourCacheOn) dealCache.set(base, { at: Date.now(), body });
+    return body;
   } catch {
     return { connected: false, unavailable: true, deals: [] };
+  }
+}
+
+function hourCacheAllowed(base) {
+  try {
+    const host = new URL(base).hostname.toLowerCase();
+    return Boolean(host) && !host.endsWith(".invalid");
+  } catch {
+    return false;
   }
 }

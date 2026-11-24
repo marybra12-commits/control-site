@@ -735,3 +735,105 @@ test("a control chat is only with Maria and names the missing method", async () 
   assert.equal(comments[0].fields.COMMENT, sent[0].MESSAGE);
   assert.equal(comments.some((item) => String(item.fields.COMMENT).includes("не SEO")), false);
 });
+
+test("SEO фото and the visible caption stay off the Bitrix message", () => {
+  const lines = controlMessages({
+    title: "Автосделка Раковой Двор Оформление+3Д",
+    created: "2026-10-09T10:00:00+03:00",
+    report: [{ title: "SEO фото", status: "Не сделано", missing: "Подписи фото на Картах шаблонные, это не SEO." }],
+    review: [{ place: "Видимая подпись, 23 кадров", wrong: "Рыба и морепродукты Раковый двор, Ростов-на-Дону, фото", change: "Напишите, что снято на этом кадре.", regulation: true }],
+  }, new Date("2026-11-23T12:00:00+03:00"));
+  assert.deepEqual(lines, []);
+});
+
+test("a later visit posts a stuck step once, and again only when that step changes", async () => {
+  resetControlChatState();
+  const rakov = {
+    id: "31",
+    title: "Автосделка Раковой Двор Оформление+3Д",
+    offer: true,
+    created: "2026-10-09T10:00:00+03:00",
+    report: [{ title: "Витрина", status: "Не сделано", missing: "Цена стоит 1 ₽, описания нет.", due: "07.11.2026" }],
+    review: [],
+  };
+  const line = controlMessages(rakov, new Date("2026-11-23T12:00:00+03:00"))[0];
+  const calls = [];
+  const fetchImpl = async (url, options) => {
+    const method = String(url).split("/").pop();
+    const body = JSON.parse(options.body);
+    calls.push(method);
+    if (method === "user.get.json") return { ok: true, async json() { return { result: [{ ID: "3", NAME: "Мария", LAST_NAME: "Брага" }] }; } };
+    if (method === "im.chat.add.json") return { ok: true, async json() { return { result: 15 }; } };
+    if (method === "im.dialog.messages.get.json") return { ok: true, async json() { return { result: { messages: [{ text: line }] } }; } };
+    if (method === "crm.timeline.comment.list.json") return { ok: true, async json() { return { result: [{ COMMENT: line }] }; } };
+    if (method === "im.message.add.json" || method === "crm.timeline.comment.add.json") {
+      return { ok: true, async json() { return { result: body }; } };
+    }
+    return { ok: true, async json() { return { result: [] }; } };
+  };
+  const base = "https://example.invalid/rest/1/placeholder/";
+  const now = new Date("2026-11-23T12:00:00+03:00");
+  const first = await deliverControlChat(fetchImpl, base, [rakov], now);
+  assert.equal(first.posted, 0);
+  assert.equal(calls.includes("im.message.add.json"), false);
+  assert.equal(calls.includes("crm.timeline.comment.add.json"), false);
+
+  resetControlChatState();
+  const sent = [];
+  const fresh = async (url, options) => {
+    const method = String(url).split("/").pop();
+    const body = JSON.parse(options.body);
+    if (method === "im.message.add.json" || method === "crm.timeline.comment.add.json") sent.push(method);
+    if (method === "user.get.json") return { ok: true, async json() { return { result: [{ ID: "3", NAME: "Мария", LAST_NAME: "Брага" }] }; } };
+    if (method === "im.chat.add.json") return { ok: true, async json() { return { result: 15 }; } };
+    if (method === "im.dialog.messages.get.json" || method === "crm.timeline.comment.list.json") {
+      return { ok: true, async json() { return { result: [] }; } };
+    }
+    return { ok: true, async json() { return { result: body }; } };
+  };
+  const opened = await deliverControlChat(fresh, base, [rakov], now);
+  const again = await deliverControlChat(fresh, base, [rakov], now);
+  const changed = await deliverControlChat(fresh, base, [{
+    ...rakov,
+    report: [{ title: "Новости", status: "Не сделано", missing: "На Картах нет новостей.", due: "29.10.2026" }],
+  }], now);
+  assert.equal(opened.posted, 1);
+  assert.equal(again.posted, 0);
+  assert.equal(changed.posted, 1);
+  assert.equal(sent.filter((method) => method === "im.message.add.json").length, 2);
+  assert.equal(sent.filter((method) => method === "crm.timeline.comment.add.json").length, 2);
+});
+
+test("the deal list and the Maps page are read once per hour", async () => {
+  resetControlChatState();
+  let bitrix = 0;
+  let maps = 0;
+  const fetchImpl = async (url) => {
+    const address = String(url);
+    if (address.includes("yandex.ru/maps")) {
+      maps += 1;
+      return { ok: true, url: address, async text() { return "<title>Раковый двор</title>"; } };
+    }
+    bitrix += 1;
+    const method = address.split("/").pop();
+    const rows = {
+      "crm.dealcategory.list.json": [{ ID: "2", NAME: "Оформление ЯКарты/Аналитика" }],
+      "crm.deal.list.json": [{ ID: "31", TITLE: "Автосделка Раковой Двор Оформление+3Д", CATEGORY_ID: "2", STAGE_ID: "C2:NEW", ASSIGNED_BY_ID: "1", DATE_CREATE: "2026-10-09T10:00:00+03:00" }],
+      "crm.status.list.json": [{ ENTITY_ID: "DEAL_STAGE_2", STATUS_ID: "C2:NEW", NAME: "Новая" }],
+      "user.get.json": [{ ID: "3", NAME: "Мария", LAST_NAME: "Брага" }],
+      "crm.deal.get.json": { ID: "31", TITLE: "Автосделка Раковой Двор Оформление+3Д", CATEGORY_ID: "2" },
+    };
+    return { ok: true, async json() { return { result: rows[method] ?? [] }; } };
+  };
+  const env = { BITRIX_WEBHOOK_URL: "https://portal.bitrix24.ru/rest/1/token/" };
+  const now = new Date("2026-11-23T12:00:00+03:00");
+  const first = await loadOformlenieDeals(env, fetchImpl, now);
+  const after = { bitrix, maps };
+  const second = await loadOformlenieDeals(env, fetchImpl, now);
+  assert.equal(first.connected, true);
+  assert.equal(second.connected, true);
+  assert.equal(bitrix, after.bitrix);
+  assert.equal(maps, after.maps);
+  assert.equal(after.maps, 1);
+  resetControlChatState();
+});
