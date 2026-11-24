@@ -671,16 +671,27 @@ export default function App() {
         })
         .then((body) => {
           if (ignore) return;
-          setBitrix({
-            connected: body?.connected === true,
-            unavailable: body?.unavailable === true,
-            pending: false,
-            deals: Array.isArray(body?.deals) ? body.deals : [],
+          const nextDeals = Array.isArray(body?.deals) ? body.deals : [];
+          setBitrix((current) => {
+            if ((body?.unavailable === true || body?.connected !== true) && nextDeals.length === 0 && current.deals.length > 0) {
+              return { ...current, pending: false };
+            }
+            return {
+              connected: body?.connected === true,
+              unavailable: body?.unavailable === true,
+              pending: false,
+              deals: nextDeals,
+            };
           });
         })
         .catch(() => {
           if (ignore) return;
-          setBitrix({ connected: false, unavailable: true, pending: false, deals: [] });
+          setBitrix((current) => ({
+            connected: current.deals.length > 0,
+            unavailable: current.deals.length === 0,
+            pending: false,
+            deals: current.deals,
+          }));
         });
     };
     load();

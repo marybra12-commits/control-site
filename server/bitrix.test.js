@@ -654,6 +654,52 @@ test("a Maps profile page yields the facts it actually contains", () => {
   assert.equal(nested.clientTone, "спокойный");
 });
 
+test("a failed category list still returns both funnels", async () => {
+  const result = await loadOformlenieDeals(
+    { BITRIX_WEBHOOK_URL: "https://example.invalid/rest/1/placeholder" },
+    async (url, options) => {
+      const method = String(url).split("/").pop();
+      const type = options?.headers?.["Content-Type"] || "";
+      const body = type.includes("json") ? JSON.parse(options.body) : {};
+      if (method === "crm.dealcategory.list.json" || method === "crm.dealcategory.default.get.json") {
+        return { ok: false, async json() { return { error: "QUERY_LIMIT_EXCEEDED", error_description: "See https://example.invalid/rest/1/placeholder" }; } };
+      }
+      if (method === "crm.dealcategory.get.json") {
+        const id = String(body.id);
+        const name = id === "7" ? "Карты поддержка" : "Оформление ЯКарты/Аналитика";
+        return { ok: true, async json() { return { result: { ID: id, NAME: name } }; } };
+      }
+      if (method === "crm.deal.list.json") {
+        return {
+          ok: true,
+          async json() {
+            return {
+              result: [
+                { ID: "1", TITLE: "Кафе Север", CATEGORY_ID: "2", STAGE_ID: "C2:NEW", STAGE_SEMANTIC_ID: "P", ASSIGNED_BY_ID: "3", DATE_CREATE: "2026-11-01T10:00:00+03:00" },
+                { ID: "2", TITLE: "Бар Юг", CATEGORY_ID: "7", STAGE_ID: "C7:NEW", STAGE_SEMANTIC_ID: "P", ASSIGNED_BY_ID: "3", DATE_CREATE: "2026-11-02T10:00:00+03:00" },
+              ],
+            };
+          },
+        };
+      }
+      if (method === "crm.status.list.json") {
+        return { ok: true, async json() { return { result: [
+          { ENTITY_ID: "DEAL_STAGE_2", STATUS_ID: "C2:NEW", NAME: "Новая" },
+          { ENTITY_ID: "DEAL_STAGE_7", STATUS_ID: "C7:NEW", NAME: "Новая" },
+        ] }; } };
+      }
+      if (method === "user.get.json") {
+        return { ok: true, async json() { return { result: [{ ID: "3", NAME: "Мария", LAST_NAME: "Брага" }] }; } };
+      }
+      return { ok: true, async json() { return { result: [] }; } };
+    },
+  );
+  assert.equal(result.connected, true);
+  assert.equal(result.deals.some((deal) => deal.funnel === "oformlenie" && deal.title === "Кафе Север"), true);
+  assert.equal(result.deals.some((deal) => deal.funnel === "podderzhka" && deal.title === "Бар Юг"), true);
+  assert.equal(JSON.stringify(result).includes("http"), false);
+});
+
 test("a later Bitrix failure still returns the named deal", async () => {
   const result = await loadOformlenieDeals(
     { BITRIX_WEBHOOK_URL: "https://example.invalid/rest/1/placeholder" },

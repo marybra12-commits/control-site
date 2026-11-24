@@ -260,6 +260,14 @@ async function postResult(fetchImpl, endpoint, body) {
   }
 }
 
+async function postCrm(fetchImpl, endpoint, body) {
+  const jsoned = await postResult(fetchImpl, endpoint, body);
+  if (jsoned.ok) return jsoned;
+  const formed = await postFields(fetchImpl, endpoint, body);
+  if (formed.ok) return formed;
+  return jsoned.errorDescription ? jsoned : formed;
+}
+
 async function postFields(fetchImpl, endpoint, body) {
   if (!(await paceOutbound())) return { ok: false, result: null, error: "" };
   try {
@@ -2561,13 +2569,13 @@ async function proofFromDialog(fetchImpl, base, dealId, now, assigneeId, row) {
   return notes;
 }
 
-async function listActiveDeals(fetchImpl, base, categoryId, select) {
+async function listDeals(fetchImpl, base, select, filter) {
   const rows = [];
   let start = 0;
   for (let page = 0; page < 3; page += 1) {
-    const listed = await postResult(fetchImpl, endpointFor(base, DEAL_LIST_METHOD), {
+    const listed = await postCrm(fetchImpl, endpointFor(base, DEAL_LIST_METHOD), {
       start,
-      filter: { CATEGORY_ID: categoryId, CLOSED: "N" },
+      filter,
       select,
       order: { DATE_CREATE: "DESC" },
     });
@@ -2579,8 +2587,16 @@ async function listActiveDeals(fetchImpl, base, categoryId, select) {
   return { ok: true, rows };
 }
 
+async function listActiveDeals(fetchImpl, base, categoryId, select) {
+  return listDeals(fetchImpl, base, select, { CATEGORY_ID: categoryId, CLOSED: "N" });
+}
+
+async function listOpenDeals(fetchImpl, base, select) {
+  return listDeals(fetchImpl, base, select, { CLOSED: "N" });
+}
+
 async function readDeal(fetchImpl, base, id) {
-  const got = await postResult(fetchImpl, endpointFor(base, "crm.deal.get.json"), { id });
+  const got = await postCrm(fetchImpl, endpointFor(base, "crm.deal.get.json"), { id });
   if (!got.ok || !got.result || typeof got.result !== "object" || Array.isArray(got.result)) return null;
   return got.result;
 }
@@ -2588,7 +2604,7 @@ async function readDeal(fetchImpl, base, id) {
 async function findNamedDeals(fetchImpl, base, select) {
   const filters = [{ "%TITLE": "Раковой" }, { "%TITLE": "Раковый" }, { "%TITLE": "Раков" }];
   for (const filter of filters) {
-    const listed = await postResult(fetchImpl, endpointFor(base, DEAL_LIST_METHOD), {
+    const listed = await postCrm(fetchImpl, endpointFor(base, DEAL_LIST_METHOD), {
       filter,
       select,
       order: { DATE_CREATE: "DESC" },
@@ -2638,15 +2654,14 @@ async function loadOformlenieDealsNow(env = serviceEnv(), fetchImpl = fetch, now
   try {
     const started = Date.now();
     const [definitions, catalog, categoriesFirst, defaultCategory] = await Promise.all([
-      postResult(fetchImpl, endpointFor(base, "crm.deal.userfield.list.json"), {}),
-      postResult(fetchImpl, endpointFor(base, "crm.deal.fields.json"), {}),
-      postResult(fetchImpl, endpointFor(base, "crm.dealcategory.list.json"), {}),
-      postResult(fetchImpl, endpointFor(base, "crm.dealcategory.default.get.json"), {}),
+      postCrm(fetchImpl, endpointFor(base, "crm.deal.userfield.list.json"), {}),
+      postCrm(fetchImpl, endpointFor(base, "crm.deal.fields.json"), {}),
+      postCrm(fetchImpl, endpointFor(base, "crm.dealcategory.list.json"), {}),
+      postCrm(fetchImpl, endpointFor(base, "crm.dealcategory.default.get.json"), {}),
     ]);
     const categories = categoriesFirst.ok
       ? categoriesFirst
-      : await postResult(fetchImpl, endpointFor(base, "crm.dealcategory.list.json"), {});
-    if (!categories.ok) return { connected: false, unavailable: true, deals: [] };
+      : await postCrm(fetchImpl, endpointFor(base, "crm.dealcategory.list.json"), {});
 
     const categoryRows = Array.isArray(categories.result) ? [...categories.result] : [];
     const fallback = defaultCategory.result;
@@ -2686,6 +2701,24 @@ async function loadOformlenieDealsNow(env = serviceEnv(), fetchImpl = fetch, now
       if (!page.ok) page = await listActiveDeals(fetchImpl, base, pipeline.id, shortSelect);
       return { pipeline, ...page };
     }));
+    if (!pipelines.length || listed.every((page) => !page.ok)) {
+      let open = await listOpenDeals(fetchImpl, base, select);
+      if (!open.ok) open = await listOpenDeals(fetchImpl, base, shortSelect);
+      if (open.ok) {
+        const known = new Set(categoryRows.map((row) => field(row?.ID)));
+        for (const id of new Set(open.rows.map((row) => field(row?.CATEGORY_ID)).filter((id) => id && !known.has(id)))) {
+          const got = await postCrm(fetchImpl, endpointFor(base, "crm.dealcategory.get.json"), { id });
+          if (got.ok && got.result && typeof got.result === "object" && !Array.isArray(got.result)) categoryRows.push(got.result);
+        }
+        for (const pipeline of pipelinesFromCategories(categoryRows)) {
+          const matched = open.rows.filter((row) => field(row?.CATEGORY_ID) === pipeline.id);
+          if (!matched.length) continue;
+          if (listed.some((page) => page.pipeline.id === pipeline.id && page.ok)) continue;
+          if (!pipelines.some((item) => item.id === pipeline.id)) pipelines.push(pipeline);
+          listed.push({ pipeline, ok: true, rows: matched });
+        }
+      }
+    }
 
     const rows = [];
     const seen = new Set();
@@ -2702,7 +2735,7 @@ async function loadOformlenieDealsNow(env = serviceEnv(), fetchImpl = fetch, now
     }
     const namedRows = await findNamedDeals(fetchImpl, base, select);
     const namedFallback = namedRows.length ? namedRows : await findNamedDeals(fetchImpl, base, shortSelect);
-    if (pipelines.length > 0 && listed.every((page) => !page.ok) && !namedFallback.length) {
+    if (!rows.length && listed.every((page) => !page.ok) && !namedFallback.length) {
       return { connected: false, unavailable: true, deals: [] };
     }
     for (const row of namedFallback) {
@@ -2716,9 +2749,9 @@ async function loadOformlenieDealsNow(env = serviceEnv(), fetchImpl = fetch, now
 
     const assigneeIds = [...new Set(rows.map((item) => field(item.row?.ASSIGNED_BY_ID)).filter(Boolean))];
     const [statuses, users] = await Promise.all([
-      postResult(fetchImpl, endpointFor(base, "crm.status.list.json"), {}),
+      postCrm(fetchImpl, endpointFor(base, "crm.status.list.json"), {}),
       assigneeIds.length
-        ? postResult(fetchImpl, endpointFor(base, "user.get.json"), { filter: { ID: assigneeIds } })
+        ? postCrm(fetchImpl, endpointFor(base, "user.get.json"), { filter: { ID: assigneeIds } })
         : Promise.resolve({ ok: true, result: [] }),
     ]);
     const stages = stageNames(statuses.result);
@@ -3073,6 +3106,14 @@ function notedBitrixError(result) {
   return cleanBitrix(result?.errorDescription || result?.error) || "Bitrix не ответил";
 }
 
+async function postReview(fetchImpl, endpoint, body) {
+  const formed = await postFields(fetchImpl, endpoint, body);
+  if (formed.ok) return formed;
+  const jsoned = await postResult(fetchImpl, endpoint, body);
+  if (jsoned.ok) return jsoned;
+  return formed.errorDescription ? formed : jsoned;
+}
+
 async function findReviewChat(fetchImpl, base) {
   const errors = [];
   const rows = [];
@@ -3081,13 +3122,13 @@ async function findReviewChat(fetchImpl, base) {
     { FIND: REVIEW_PHONE },
   ];
   for (const body of searches) {
-    const listed = await postFields(fetchImpl, endpointFor(base, "im.search.chat.list.json"), body);
+    const listed = await postReview(fetchImpl, endpointFor(base, "im.search.chat.list.json"), body);
     if (!listed.ok && !listed.result) errors.push(notedBitrixError(listed));
     rows.push(...recentDialogs(listed.result));
     const found = bestReviewChat(rows);
     if (found) return { ...found, error: "" };
   }
-  const duplicates = await postFields(fetchImpl, endpointFor(base, "crm.duplicate.findbycomm.json"), {
+  const duplicates = await postReview(fetchImpl, endpointFor(base, "crm.duplicate.findbycomm.json"), {
     type: "PHONE",
     values: [REVIEW_PHONE, `+${REVIEW_PHONE}`],
   });
@@ -3096,7 +3137,7 @@ async function findReviewChat(fetchImpl, base) {
   for (const [kind, ids] of Object.entries(found)) {
     const entity = kind.toLowerCase().replace(/s$/, "");
     for (const id of Array.isArray(ids) ? ids : []) {
-      const line = await postFields(fetchImpl, endpointFor(base, "imopenlines.crm.chat.get.json"), {
+      const line = await postReview(fetchImpl, endpointFor(base, "imopenlines.crm.chat.get.json"), {
         CRM_ENTITY_TYPE: entity,
         CRM_ENTITY: field(id),
       });
@@ -3117,7 +3158,7 @@ async function readReviewMessages(fetchImpl, base, chat) {
   for (let page = 0; page < 24; page += 1) {
     const body = { DIALOG_ID: dialogId, LIMIT: 50 };
     if (lastId) body.LAST_ID = lastId;
-    const history = await postFields(fetchImpl, endpointFor(base, "im.dialog.messages.get.json"), body);
+    const history = await postReview(fetchImpl, endpointFor(base, "im.dialog.messages.get.json"), body);
     if (!history.ok && !history.result) {
       const error = cleanBitrix(history.errorDescription || history.error) || "Bitrix не ответил";
       if (!messages.length && chat.sessionId) break;
@@ -3132,7 +3173,7 @@ async function readReviewMessages(fetchImpl, base, chat) {
     lastId = oldest;
   }
   if (!messages.length && chat.sessionId) {
-    const history = await postFields(fetchImpl, endpointFor(base, "imopenlines.session.history.get.json"), { SESSION_ID: chat.sessionId });
+    const history = await postReview(fetchImpl, endpointFor(base, "imopenlines.session.history.get.json"), { SESSION_ID: chat.sessionId });
     if (!history.ok && !history.result) {
       return { messages: [], error: cleanBitrix(history.errorDescription || history.error) || "Bitrix не ответил", truncated: false };
     }
