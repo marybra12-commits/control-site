@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { doneLabel, overdueItems } from "../src/content.js";
-import { acceptanceStatus, clearSentMemory, controlBrief, controlMessages, deliverControlChat, latePublications, loadOformlenieDeals, monthPlan, organizationName, parseMapsProfile, pipelineSection, postReadyCards, readDialog, readyReviewLine, resetControlChatState, reviewFindings, webhookConfigured } from "./bitrix.js";
+import { acceptanceStatus, clearSentMemory, controlBrief, controlMessages, deliverControlChat, latePublications, loadOformlenieDeals, loadReviewClients, monthPlan, organizationName, parseMapsProfile, parseReviewClients, pipelineSection, postReadyCards, readDialog, readyReviewLine, resetControlChatState, reviewFindings, webhookConfigured } from "./bitrix.js";
 import { resetSendFlight, sendControlOnce } from "./send-once.js";
 
 test("missing or blank webhook stays disconnected and does not call Bitrix", async () => {
@@ -1208,4 +1208,81 @@ test("a closed chat is joined once and the review message is posted there", asyn
   assert.equal(writes.at(-1).body.DIALOG_ID, "chat22");
   delete process.env.CONTROL_SENT_FILE;
   resetControlChatState();
+});
+
+test("the review chat keeps every named launch and drops a compliment", () => {
+  const clients = parseReviewClients([
+    { id: 1, text: "Спасибо, на карте кафе красивое и уютное место для гостей." },
+    { id: 2, text: "Гостевой дом Арс\nhttps://yandex.ru/maps/org/ars/1\nМария Литвиненко: 11 отзывов к оплате за прошлую неделю\nКирилл Соколов, 5 звёзд, на модерации\nВот 12шт\nвопрос 5500\nв работе" },
+    { id: 3, text: "Кафе Север\nhttps://yandex.ru/maps/org/sever/2\nзаказано 20\n01.11.2026 Анна Смирнова получено 8\nостаток 12\nоплата 4000\nзапущен" },
+  ]);
+  assert.equal(clients.length, 2);
+  const ars = clients.find((item) => item.organization === "Гостевой дом Арс");
+  assert.equal(ars.link, "https://yandex.ru/maps/org/ars/1");
+  assert.equal(ars.purchased, "Нет данных");
+  assert.equal(ars.remainder, "Нет данных");
+  assert.equal(ars.payment, "Вопрос, 5500");
+  assert.equal(ars.paymentNote.includes("11"), true);
+  assert.equal(ars.status, "в работе");
+  assert.equal(ars.shots[0].account, "Кирилл Соколов");
+  assert.equal(ars.shots[0].received, "12");
+  assert.equal(ars.shots[0].date, "Нет данных");
+  assert.equal(ars.shots[0].note.includes("5 звёзд"), true);
+  assert.equal(ars.shots[0].note.includes("на модерации"), true);
+  const sever = clients.find((item) => item.organization === "Кафе Север");
+  assert.equal(sever.purchased, "20");
+  assert.equal(sever.remainder, "12");
+  assert.equal(sever.payment, "4000");
+  assert.equal(sever.status, "запущен");
+  assert.equal(sever.shots[0].date, "01.11.2026");
+  assert.equal(sever.shots[0].account, "Анна Смирнова");
+  assert.equal(sever.shots[0].received, "8");
+});
+
+test("a failed review chat keeps the Bitrix error and no invented client", async () => {
+  const calls = [];
+  const result = await loadReviewClients({ BITRIX_WEBHOOK_URL: "https://portal.example/rest/1/token/" }, async (endpoint) => {
+    const method = endpoint.split("/").pop();
+    calls.push(method);
+    return {
+      ok: false,
+      async json() {
+        return { error: "QUERY_LIMIT_EXCEEDED", error_description: "See https://portal.example/rest/1/token/docs" };
+      },
+    };
+  });
+  assert.equal(result.connected, false);
+  assert.deepEqual(result.clients, []);
+  assert.equal(result.error.includes("QUERY_LIMIT_EXCEEDED"), true);
+  assert.equal(result.error.includes("http"), false);
+  assert.equal(result.error.includes("token"), false);
+  assert.equal(calls.includes("im.message.add.json"), false);
+  assert.equal(calls.includes("im.chat.add.json"), false);
+});
+
+test("the review loader reads the Maxim chat and does not post", async () => {
+  const calls = [];
+  const result = await loadReviewClients({ BITRIX_WEBHOOK_URL: "https://portal.example/rest/1/token/" }, async (endpoint, options) => {
+    const method = endpoint.split("/").pop();
+    calls.push(method);
+    const body = JSON.parse(options.body);
+    if (method === "im.search.chat.list.json" && body.FIND === "Максим Отзывы") {
+      return { ok: true, async json() { return { result: [{ id: "chat77", title: "Максим Отзывы", entity_id: "wazzup|79286096999" }] }; } };
+    }
+    if (method === "im.chat.get.json") {
+      return { ok: true, async json() { return { result: { id: 77, title: "Максим Отзывы", entity_id: "wazzup|79286096999" } }; } };
+    }
+    if (method === "im.dialog.messages.get.json") {
+      if (body.LAST_ID) return { ok: true, async json() { return { result: { messages: [] } }; } };
+      return { ok: true, async json() { return { result: { messages: [{ id: 4, text: "Кафе Север\nзаказано 3\nзапущен" }] } }; } };
+    }
+    return { ok: true, async json() { return { result: [] }; } };
+  });
+  assert.equal(result.connected, true);
+  assert.equal(result.clients.length, 1);
+  assert.equal(result.clients[0].organization, "Кафе Север");
+  assert.equal(result.clients[0].purchased, "3");
+  assert.equal(result.clients[0].status, "запущен");
+  assert.equal(calls.includes("im.message.add.json"), false);
+  assert.equal(JSON.stringify(result).includes("portal.example"), false);
 });

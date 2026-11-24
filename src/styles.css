@@ -832,17 +832,19 @@ dd {
 }
 
 .reviews th:nth-child(1),
-.reviews td:nth-child(1) { width: 16%; }
+.reviews td:nth-child(1) { width: 15%; }
 .reviews th:nth-child(2),
 .reviews td:nth-child(2) { width: 14%; }
 .reviews th:nth-child(3),
-.reviews td:nth-child(3) { width: 12%; }
+.reviews td:nth-child(3) { width: 10%; }
 .reviews th:nth-child(4),
-.reviews td:nth-child(4) { width: 26%; }
+.reviews td:nth-child(4) { width: 24%; }
 .reviews th:nth-child(5),
-.reviews td:nth-child(5) { width: 12%; }
+.reviews td:nth-child(5) { width: 10%; }
 .reviews th:nth-child(6),
-.reviews td:nth-child(6) { width: 20%; }
+.reviews td:nth-child(6) { width: 17%; }
+.reviews th:nth-child(7),
+.reviews td:nth-child(7) { width: 10%; }
 
 .reviews th,
 .reviews td {

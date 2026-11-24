@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize, sep } from "node:path";
 import { GET } from "./deals-handler.js";
+import { GET as readReviews } from "./reviews-handler.js";
 
 function publishedWebhook() {
   try {
@@ -47,17 +48,20 @@ function filePath(pathname) {
 
 createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
-  if (url.pathname === "/api/oformlenie") {
+  if (url.pathname === "/api/oformlenie" || url.pathname === "/api/otzyvy") {
     if (req.method !== "GET") {
       res.writeHead(405, {
         "content-type": "application/json; charset=utf-8",
         "cache-control": "no-store",
         allow: "GET",
       });
-      res.end(JSON.stringify({ connected: false, deals: [] }));
+      res.end(JSON.stringify(url.pathname === "/api/otzyvy"
+        ? { connected: false, clients: [], error: "Bitrix не ответил", truncated: false }
+        : { connected: false, deals: [] }));
       return;
     }
-    const response = await GET(req, { env: process.env }, publishedWebhook());
+    const read = url.pathname === "/api/otzyvy" ? readReviews : GET;
+    const response = await read(req, { env: process.env }, publishedWebhook());
     res.writeHead(response.status, {
       "content-type": "application/json; charset=utf-8",
       "cache-control": "no-store",

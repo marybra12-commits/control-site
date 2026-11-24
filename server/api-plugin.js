@@ -1,9 +1,9 @@
-import { loadOformlenieDeals, serviceEnv } from "./bitrix.js";
+import { loadOformlenieDeals, loadReviewClients, serviceEnv } from "./bitrix.js";
 
 function attach(server) {
   server.middlewares.use(async (req, res, next) => {
     const path = req.url?.split("?")[0];
-    if (path !== "/api/oformlenie") {
+    if (path !== "/api/oformlenie" && path !== "/api/otzyvy") {
       next();
       return;
     }
@@ -13,15 +13,21 @@ function attach(server) {
 
     if (req.method !== "GET") {
       res.statusCode = 405;
-      res.end(JSON.stringify({ connected: false, deals: [] }));
+      res.end(JSON.stringify(path === "/api/otzyvy"
+        ? { connected: false, clients: [], error: "Bitrix не ответил", truncated: false }
+        : { connected: false, deals: [] }));
       return;
     }
 
     try {
-      const body = await loadOformlenieDeals(serviceEnv());
+      const body = path === "/api/otzyvy"
+        ? await loadReviewClients(serviceEnv())
+        : await loadOformlenieDeals(serviceEnv());
       res.end(JSON.stringify(body));
     } catch {
-      res.end(JSON.stringify({ connected: false, deals: [] }));
+      res.end(JSON.stringify(path === "/api/otzyvy"
+        ? { connected: false, clients: [], error: "Bitrix не ответил", truncated: false }
+        : { connected: false, deals: [] }));
     }
   });
 }

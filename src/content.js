@@ -34,7 +34,7 @@ export const reviewClients = [
   },
 ];
 
-export const reviewGap = "Переписка Wazzup «Максим Отзывы», WhatsApp 79286096999. Других организаций в этих сообщениях нет.";
+export const reviewSource = "Переписка Wazzup «Максим Отзывы», WhatsApp 79286096999.";
 
 export const adsNote = "Пока не подключено. Объявления появятся из Яндекс Бизнеса.";
 

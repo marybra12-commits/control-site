@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { adsNote, disconnectedLine, doneLabel, emptyState, events, noData, overdueItems, reviewClients, reviewGap, sections, trends } from "./content.js";
+import { adsNote, disconnectedLine, doneLabel, emptyState, events, noData, overdueItems, reviewClients, reviewSource, sections, trends } from "./content.js";
 
 function sectionFromHash() {
   const id = window.location.hash.replace(/^#/, "").split("/")[0];
@@ -51,14 +51,6 @@ function dealsForSection(section, deals) {
   if (section.id === "reklama" || section.id === "otzyvy" || section.id === "tendentsii" || section.id === "meropriyatiya") return [];
   if (section.funnel) return deals.filter((deal) => deal.funnel === section.funnel);
   return deals;
-}
-
-function knownLink(deals, organization) {
-  const needle = organization.trim().toLowerCase();
-  const deal = deals.find((item) => String(item.title || "").trim().toLowerCase() === needle);
-  const link = typeof deal?.link === "string" ? deal.link.trim() : "";
-  if (!link || link === noData) return noData;
-  return link;
 }
 
 function safeShot(value) {
@@ -147,7 +139,14 @@ function ShotList({ shots }) {
   );
 }
 
-function ReviewsTable({ deals }) {
+function ReviewsTable({ clients, error, pending, truncated }) {
+  const rows = clients.length > 0 ? clients : reviewClients;
+  const note = [
+    pending ? "Читаем переписку «Максим Отзывы»…" : "",
+    error || "",
+    truncated ? "Показана не вся переписка." : "",
+    reviewSource,
+  ].filter(Boolean).join(" ");
   return (
     <section className="card reviews-card" aria-label="Отзывы">
       <div className="reviews-scroll">
@@ -160,26 +159,28 @@ function ReviewsTable({ deals }) {
               <th>Скриншоты</th>
               <th>Остаток</th>
               <th>Оплата</th>
+              <th>Статус</th>
             </tr>
           </thead>
           <tbody>
-            {reviewClients.map((client) => (
+            {rows.map((client) => (
               <tr key={client.id}>
                 <td>{client.organization}</td>
-                <td>{dealLink(knownLink(deals, client.organization))}</td>
-                <td>{client.purchased}</td>
+                <td>{dealLink(client.link || noData)}</td>
+                <td>{client.purchased || noData}</td>
                 <td className="reviews-facts"><ShotList shots={client.shots} /></td>
-                <td>{client.remainder}</td>
+                <td>{client.remainder || noData}</td>
                 <td className="reviews-pay">
-                  <p>{client.payment}</p>
+                  <p>{client.payment || noData}</p>
                   {client.paymentNote ? <p className="reviews-sub">{client.paymentNote}</p> : null}
                 </td>
+                <td>{client.status || noData}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-      <p className="reviews-note">{reviewGap}</p>
+      <p className="reviews-note">{note}</p>
     </section>
   );
 }
@@ -620,6 +621,12 @@ export default function App() {
     pending: true,
     deals: [],
   });
+  const [reviews, setReviews] = useState({
+    pending: false,
+    error: "",
+    clients: [],
+    truncated: false,
+  });
 
   useEffect(() => {
     const onHashChange = () => {
@@ -660,6 +667,35 @@ export default function App() {
       window.clearInterval(timer);
     };
   }, []);
+
+  useEffect(() => {
+    if (currentId !== "otzyvy") return undefined;
+    let ignore = false;
+    setReviews((current) => ({ ...current, pending: true }));
+    fetch("/api/otzyvy", { cache: "no-store", headers: { accept: "application/json" } })
+      .then(async (response) => {
+        const type = response.headers.get("content-type") || "";
+        if (!response.ok || !type.includes("json")) throw new Error("unavailable");
+        return response.json();
+      })
+      .then((body) => {
+        if (ignore) return;
+        const error = typeof body?.error === "string" ? body.error.replace(/https?:\/\/\S+/gi, "").trim() : "";
+        setReviews({
+          pending: false,
+          error,
+          clients: Array.isArray(body?.clients) ? body.clients : [],
+          truncated: body?.truncated === true,
+        });
+      })
+      .catch(() => {
+        if (ignore) return;
+        setReviews({ pending: false, error: "Bitrix не ответил", clients: [], truncated: false });
+      });
+    return () => {
+      ignore = true;
+    };
+  }, [currentId]);
 
   const section = sections.find((item) => item.id === currentId) ?? sections[0];
   const sectionDeals = dealsForSection(section, bitrix.deals);
@@ -731,7 +767,12 @@ export default function App() {
               <p>{adsNote}</p>
             </section>
           ) : showReviews ? (
-            <ReviewsTable deals={bitrix.deals} />
+            <ReviewsTable
+              clients={reviews.clients}
+              error={reviews.error}
+              pending={reviews.pending}
+              truncated={reviews.truncated}
+            />
           ) : showDetail ? (
             <DealDetail key={openDealId} section={section} deal={openDeal} onBack={() => setOpenDealId(null)} />
           ) : showDeals ? (

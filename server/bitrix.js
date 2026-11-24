@@ -2836,3 +2836,265 @@ function hourCacheAllowed(base) {
     return false;
   }
 }
+
+const REVIEW_PHONE = "79286096999";
+const ORG_WORD = /гостевой\s+дом|кафе|ресторан|\bбар\b|салон|магазин|гостиниц|двор|компани|студи|клиник|отел|пекарн|кофейн|\bип\b|\bооо\b/i;
+
+function messagePlain(row) {
+  const chunks = [];
+  const take = (item) => {
+    if (typeof item === "string" || typeof item === "number") {
+      const text = String(item).replace(/\r/g, "").trim();
+      if (text) chunks.push(text);
+      return;
+    }
+    if (Array.isArray(item)) {
+      item.forEach(take);
+      return;
+    }
+    if (item && typeof item === "object") {
+      for (const key of ["text", "TEXT", "message", "MESSAGE", "caption", "DESCRIPTION"]) {
+        if (item[key] != null && item[key] !== item) take(item[key]);
+      }
+    }
+  };
+  take(row?.text);
+  take(row?.message);
+  take(row?.MESSAGE);
+  return chunks.join("\n").trim();
+}
+
+function reviewDigits(value) {
+  return field(value).replace(/\D/g, "");
+}
+
+function reviewPhoneHit(value) {
+  return reviewDigits(value).endsWith(REVIEW_PHONE);
+}
+
+function reviewTitleHit(value) {
+  const text = normalizedTitle(value);
+  return text.includes("максим") && text.includes("отзыв");
+}
+
+function orgNameFrom(line) {
+  const stripped = field(line).replace(/^\d+[.)]\s*/, "").trim();
+  if (!stripped || /^https?:/i.test(stripped)) return "";
+  const labeled = stripped.match(/^(?:клиент|организация|карточка|точка)\s*[:—–-]\s*(.+)$/i);
+  if (labeled) {
+    const name = labeled[1].trim().replace(/[.,;:]+$/g, "");
+    if (name && name.length <= 80 && !/^https?:/i.test(name) && !reviewTitleHit(name)) return name;
+  }
+  if (stripped.split(/\s+/).length > 6) return "";
+  if (!ORG_WORD.test(stripped)) return "";
+  if (/^(привет|спасибо|вопрос|вот)\b/i.test(stripped)) return "";
+  if (reviewTitleHit(stripped)) return "";
+  return stripped.replace(/[.,;:]+$/g, "");
+}
+
+function latestReviewStatus(text) {
+  const folded = text.toLowerCase().replaceAll("ё", "е");
+  let status = "";
+  for (const match of folded.matchAll(/в работе|запущ\w*/g)) {
+    status = match[0].startsWith("запущ") ? "запущен" : "в работе";
+  }
+  return status;
+}
+
+function shotsFrom(lines, organization) {
+  const shots = [];
+  const seen = new Set();
+  for (let index = 0; index < lines.length; index += 1) {
+    const nearby = [lines[index - 1], lines[index], lines[index + 1]].filter(Boolean).join(" ");
+    const account = (lines[index].match(/[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+/) || [])[0] || "";
+    if (!account) continue;
+    const accountKey = normalizedTitle(account);
+    if (accountKey === normalizedTitle(organization) || accountKey.includes("литвинен")) continue;
+    const folded = nearby.toLowerCase().replaceAll("ё", "е");
+    const count = (folded.match(/(\d+)\s*шт/) || folded.match(/получено\s+(\d+)/) || folded.match(/вот\s+(\d+)/) || [])[1] || "";
+    if (!count && !/звезд|модерац/.test(folded)) continue;
+    const date = (nearby.match(/\d{1,2}\.\d{1,2}\.\d{2,4}/) || nearby.match(/\d{1,2}\s+(?:января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)(?:\s+\d{4})?/i) || [])[0] || NO_DATA;
+    const notes = [];
+    const stars = folded.match(/(\d+)\s*звезд/);
+    if (stars) notes.push(`${stars[1]} звёзд`);
+    if (folded.includes("на модерации")) notes.push("на модерации");
+    const key = `${accountKey}:${count}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    shots.push({
+      date,
+      account,
+      received: count || NO_DATA,
+      ...(notes.length ? { note: notes.join(", ") } : {}),
+    });
+  }
+  return shots;
+}
+
+function clientFromLines(organization, lines) {
+  const text = lines.join("\n");
+  const folded = text.toLowerCase().replaceAll("ё", "е");
+  const links = [...text.matchAll(/https?:\/\/[^\s<>]+/gi)]
+    .map((match) => match[0].replace(/[),.;]+$/g, ""))
+    .filter((url) => !/\/rest\//i.test(url) && !reviewPhoneHit(url));
+  const purchased = (folded.match(/заказан[а-я]*\s+(\d+)/) || folded.match(/заказ\s+(\d+)/) || [])[1] || "";
+  const remainder = (folded.match(/остат(?:ок|лось)?\s+(\d+)/) || [])[1] || "";
+  const question = (folded.match(/вопрос\D{0,24}(\d{3,})/) || [])[1] || "";
+  const paid = (folded.match(/(?:оплат[а-я]*|к оплате)\D{0,16}(\d{3,})/) || [])[1] || "";
+  const toPay = (folded.match(/(\d+)\s+отзыв[а-я]*\s+к оплате/) || [])[1] || "";
+  let paymentNote = "";
+  if (toPay) {
+    paymentNote = folded.includes("прошл") ? `${toPay} отзывов к оплате за прошлую неделю.` : `${toPay} отзывов к оплате.`;
+  }
+  return {
+    id: normalizedTitle(organization).replace(/[^a-z0-9а-я]+/gi, "-").replace(/^-|-$/g, "") || "client",
+    organization,
+    link: links[0] || "",
+    purchased: purchased || NO_DATA,
+    remainder: remainder || NO_DATA,
+    payment: question ? `Вопрос, ${question}` : (paid || NO_DATA),
+    ...(paymentNote ? { paymentNote } : {}),
+    status: latestReviewStatus(folded) || NO_DATA,
+    shots: shotsFrom(lines, organization),
+  };
+}
+
+export function parseReviewClients(messages) {
+  const ordered = [...(Array.isArray(messages) ? messages : [])].sort((left, right) => {
+    const leftId = Number(left?.id ?? left?.ID);
+    const rightId = Number(right?.id ?? right?.ID);
+    if (Number.isFinite(leftId) && Number.isFinite(rightId) && leftId !== rightId) return leftId - rightId;
+    const leftDate = messageDate(left);
+    const rightDate = messageDate(right);
+    if (leftDate && rightDate && leftDate !== rightDate) return leftDate < rightDate ? -1 : 1;
+    return 0;
+  });
+  const blocks = [];
+  for (const message of ordered) {
+    const lines = messagePlain(message).split("\n").map((line) => line.trim()).filter(Boolean);
+    for (const line of lines) {
+      const name = orgNameFrom(line);
+      if (name) {
+        blocks.push({ organization: name, lines: [line] });
+        continue;
+      }
+      if (blocks.length) blocks[blocks.length - 1].lines.push(line);
+    }
+  }
+  const byName = new Map();
+  for (const block of blocks) {
+    const key = normalizedTitle(block.organization);
+    const existing = byName.get(key);
+    if (existing) existing.lines.push(...block.lines);
+    else byName.set(key, block);
+  }
+  return [...byName.values()].map((block) => clientFromLines(block.organization, block.lines));
+}
+
+function reviewChatScore(row) {
+  const blob = [dialogTitle(row), row?.entity_id, row?.ENTITY_ID, row?.description, row?.DESCRIPTION].map(field).join(" ");
+  let score = 0;
+  if (reviewTitleHit(dialogTitle(row)) || reviewTitleHit(blob)) score += 8;
+  if (reviewPhoneHit(blob)) score += 8;
+  return score;
+}
+
+async function findReviewChat(fetchImpl, base) {
+  const errors = [];
+  const rows = [];
+  const searches = [
+    ["im.search.chat.list.json", { FIND: "Максим Отзывы", LIMIT: 30 }],
+    ["im.search.chat.list.json", { FIND: REVIEW_PHONE, LIMIT: 20 }],
+    ["im.recent.get.json", { SKIP_OPENLINES: "N", LIMIT: 50 }],
+  ];
+  for (const [method, body] of searches) {
+    const listed = await postResult(fetchImpl, endpointFor(base, method), body);
+    if (!listed.ok && !listed.result) errors.push(cleanBitrix(listed.errorDescription || listed.error) || "Bitrix не ответил");
+    rows.push(...recentDialogs(listed.result));
+  }
+  const duplicates = await postResult(fetchImpl, endpointFor(base, "crm.duplicate.findbycomm.json"), {
+    type: "PHONE",
+    values: [REVIEW_PHONE, `+${REVIEW_PHONE}`],
+  });
+  if (!duplicates.ok && !duplicates.result) errors.push(cleanBitrix(duplicates.errorDescription || duplicates.error) || "Bitrix не ответил");
+  const found = duplicates.result && typeof duplicates.result === "object" ? duplicates.result : {};
+  for (const [kind, ids] of Object.entries(found)) {
+    const entity = kind.toLowerCase().replace(/s$/, "");
+    for (const id of Array.isArray(ids) ? ids : []) {
+      const line = await postResult(fetchImpl, endpointFor(base, "imopenlines.crm.chat.get.json"), {
+        CRM_ENTITY_TYPE: entity,
+        CRM_ENTITY: field(id),
+      });
+      if (line.result) rows.push(line.result);
+    }
+  }
+  let best = null;
+  const seen = new Set();
+  for (const row of rows) {
+    const id = recentChatId(row) || chatIdFrom(row);
+    if (!id || seen.has(id)) continue;
+    if (reviewChatScore(row) < 8) continue;
+    seen.add(id);
+    const info = await postResult(fetchImpl, endpointFor(base, "im.chat.get.json"), { CHAT_ID: id });
+    const detail = info.ok && info.result && typeof info.result === "object" ? { ...row, ...info.result } : row;
+    const score = reviewChatScore(detail);
+    if (score < 8) continue;
+    if (!best || score > best.score) best = { id, score, sessionId: sessionIdFrom(detail) };
+  }
+  if (best) return { id: best.id, sessionId: best.sessionId, error: "" };
+  const listed = errors.find(Boolean);
+  if (!rows.length && listed) return { id: "", sessionId: "", error: listed };
+  return { id: "", sessionId: "", error: listed || "В списке диалогов нет чата «Максим Отзывы»." };
+}
+
+async function readReviewMessages(fetchImpl, base, chat) {
+  const dialogId = `chat${field(chat.id).replace(/^chat/i, "")}`;
+  const messages = [];
+  let lastId = "";
+  for (let page = 0; page < 24; page += 1) {
+    const body = { DIALOG_ID: dialogId, LIMIT: 50 };
+    if (lastId) body.LAST_ID = lastId;
+    const history = await postResult(fetchImpl, endpointFor(base, "im.dialog.messages.get.json"), body);
+    if (!history.ok && !history.result) {
+      const error = cleanBitrix(history.errorDescription || history.error) || "Bitrix не ответил";
+      if (!messages.length && chat.sessionId) break;
+      return { messages, error: messages.length ? "" : error, truncated: messages.length > 0 };
+    }
+    const batch = messageList(history.result);
+    if (!batch.length) return { messages, error: "", truncated: false };
+    messages.push(...batch);
+    const ids = batch.map((item) => Number(item?.id ?? item?.ID)).filter((item) => Number.isFinite(item));
+    const oldest = ids.length ? String(Math.min(...ids)) : "";
+    if (!oldest || oldest === lastId || batch.length < 50) return { messages, error: "", truncated: false };
+    lastId = oldest;
+  }
+  if (!messages.length && chat.sessionId) {
+    const history = await postResult(fetchImpl, endpointFor(base, "imopenlines.session.history.get.json"), { SESSION_ID: chat.sessionId });
+    if (!history.ok && !history.result) {
+      return { messages: [], error: cleanBitrix(history.errorDescription || history.error) || "Bitrix не ответил", truncated: false };
+    }
+    return { messages: messageList(history.result), error: "", truncated: false };
+  }
+  return { messages, error: "", truncated: messages.length > 0 };
+}
+
+export async function loadReviewClients(env = serviceEnv(), fetchImpl = fetch) {
+  if (!webhookConfigured(env)) return { connected: false, clients: [], error: "Битрикс пока не подключён.", truncated: false };
+  const base = field(env[WEBHOOK_ENV]);
+  paceBypass += 1;
+  try {
+    const chat = await findReviewChat(fetchImpl, base);
+    if (!chat.id) return { connected: false, clients: [], error: cleanBitrix(chat.error) || "В списке диалогов нет чата «Максим Отзывы».", truncated: false };
+    const read = await readReviewMessages(fetchImpl, base, chat);
+    if (read.error && !read.messages.length) return { connected: false, clients: [], error: cleanBitrix(read.error), truncated: false };
+    const clients = parseReviewClients(read.messages);
+    if (!clients.length) {
+      return { connected: true, clients: [], error: "В переписке не нашлось организаций.", truncated: read.truncated };
+    }
+    return { connected: true, clients, error: "", truncated: read.truncated };
+  } catch {
+    return { connected: false, clients: [], error: "Bitrix не ответил", truncated: false };
+  } finally {
+    paceBypass -= 1;
+  }
+}
