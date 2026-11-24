@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { adsNote, disconnectedLine, emptyState, events, noData, reviewClients, reviewGap, sections, trends } from "./content.js";
+import { adsNote, disconnectedLine, doneLabel, emptyState, events, noData, overdueItems, reviewClients, reviewGap, sections, trends } from "./content.js";
 
 function sectionFromHash() {
   const id = window.location.hash.replace(/^#/, "").split("/")[0];
@@ -304,11 +304,11 @@ function DealDetail({ section, deal, onBack }) {
         <>
           {report.length > 0 && report.every((item) => item.status === "Сделано") ? (
             <p className="stuck-banner ready-banner">Карточка готова к проверке.</p>
-          ) : report.some((item) => item.status === "Не сделано") ? (
+          ) : overdueItems(report).length > 0 ? (
             <div className="stuck-banner">
               <p>Застряло</p>
               <ul className="stuck-list">
-                {report.filter((item) => item.status === "Не сделано").map((item) => (
+                {overdueItems(report).map((item) => (
                   <li key={item.title}>{item.say || item.missing || item.title}</li>
                 ))}
               </ul>
@@ -337,13 +337,15 @@ function DealDetail({ section, deal, onBack }) {
                         aria-expanded={opened}
                         onClick={() => setOpenProof(opened ? "" : key)}
                       >
-                        Сделано
+                        {doneLabel(item)}
                       </button>
                     ) : null}
                     {item.status === "Не сделано" ? <span className="miss-button">Не сделано</span> : null}
                     {!proven && item.status !== "Не сделано" ? <span className="pill">{noData}</span> : null}
+                    {item.firstNews ? <p className="check-note">Первая новость: «{item.firstNews}»</p> : null}
                     {opened ? <p className="proof-line">{item.proof}</p> : null}
                     {item.status === "Не сделано" && item.missing ? <p className="check-note">{item.missing}</p> : null}
+                    {item.overdue && item.due ? <p className="check-note">Просрочено, срок был {item.due}.</p> : null}
                   </li>
                 );
               })}

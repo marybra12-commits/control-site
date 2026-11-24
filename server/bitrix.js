@@ -889,6 +889,17 @@ function moscowLongDay(value) {
   }).format(new Date(number));
 }
 
+function moscowDoneOn(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 1000000000000) return "";
+  return new Intl.DateTimeFormat("ru-RU", {
+    timeZone: "Europe/Moscow",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(new Date(number)).replace(/\s*г\.$/, "");
+}
+
 function shownAddress(fromDeal, fromMaps) {
   const maps = field(fromMaps);
   const deal = field(fromDeal);
@@ -957,6 +968,14 @@ export function parseMapsProfile(html) {
   const newsRows = Array.isArray(card?.eventsPreviews?.items) ? card.eventsPreviews.items : [];
   const newsTitles = newsRows.map(newsTitle).filter(Boolean);
   const newsDays = [...new Set(newsRows.map((item) => moscowLongDay(item?.publicationTime)).filter(Boolean))];
+  const timedNews = newsRows
+    .map((item) => ({ title: newsTitle(item), stamp: Number(item?.publicationTime) }))
+    .filter((item) => item.title && Number.isFinite(item.stamp) && item.stamp >= 1000000000000)
+    .sort((left, right) => left.stamp - right.stamp);
+  const earliestNews = timedNews[0];
+  const firstNews = earliestNews
+    ? { title: earliestNews.title, doneOn: moscowDoneOn(earliestNews.stamp) }
+    : null;
   const eventCount = Number(card?.eventsPreviews?.count);
   const goodsTabPresent = /aria-label="(?:Товары|Меню)/i.test(source);
   const newsTabPresent = /aria-label="Новости/i.test(source);
@@ -1005,6 +1024,7 @@ export function parseMapsProfile(html) {
     goodsPresent: goodsTabPresent || goodsNames.length > 0 || (typeof goods === "number" && goods > 0),
     posts,
     newsTitles,
+    firstNews,
     newsDate: newsDays.length === 1 ? newsDays[0] : newsDays.join(", "),
     newsPresent: newsTabPresent || newsTitles.length > 0 || (typeof posts === "number" && posts > 0),
     sites: links,
@@ -1115,7 +1135,10 @@ function newsProof(profile) {
   }
   const shown = titles.slice(0, 2).map((title) => `«${title}»`).join(" и ");
   const when = profile.newsDate ? ` от ${profile.newsDate}` : "";
-  return `На Картах ${count} новостей${when}, в том числе ${shown}.`;
+  const first = profile.firstNews?.title && profile.firstNews?.doneOn
+    ? `Первая новость «${profile.firstNews.title}» от ${profile.firstNews.doneOn}. `
+    : "";
+  return `${first}На Картах ${count} новостей${when}, в том числе ${shown}.`;
 }
 
 function factFor(profile, key) {
@@ -1213,8 +1236,20 @@ function chatFact(pointKey, heard) {
   return "В переписке Wazzup это уже есть.";
 }
 
-export function controlBrief({ maps, created, now, heard, replies, deal = {} }) {
-  const start = dayZeroKey(created);
+function monthEdge(received) {
+  const start = dayZeroKey(received);
+  if (!start) return "";
+  return addDays(start, 29);
+}
+
+function monthOverdue(received, now) {
+  const edge = monthEdge(received);
+  if (!edge || !(now instanceof Date)) return { overdue: false, due: "" };
+  if (now > atMoscowHour(edge, 18)) return { overdue: true, due: formatDay(edge) };
+  return { overdue: false, due: "" };
+}
+
+export function controlBrief({ maps, now, heard, replies, deal = {} }) {
   const slow = typeof replies === "string" && (replies.includes("реже") || replies.includes("пауза"));
   const opened = Boolean(maps?.opened || maps?.readable);
   const rows = CONTROL_POINTS.map((point) => {
@@ -1233,9 +1268,6 @@ export function controlBrief({ maps, created, now, heard, replies, deal = {} }) 
     const fact = factFor(opened ? { ...maps, fileSeo: Boolean(deal.fileSeo) } : null, point.key);
     const fromDeal = dealFact(point.key, deal);
     const fromChat = chatFact(point.key, heard);
-    const dueKey = start && typeof point.due === "number" ? addDays(start, point.due) : "";
-    const due = dueKey ? formatDay(dueKey) : "";
-    const late = Boolean(dueKey && now > atMoscowHour(dueKey, 18));
     const pause = slow ? " Клиент отвечает с паузами." : "";
     if (fact.state === "yes" && fact.proof) {
       const inFiles = point.key === "seo" && deal.fileSeo;
@@ -1279,16 +1311,21 @@ export function controlBrief({ maps, created, now, heard, replies, deal = {} }) 
       const missing = fromDeal ? `${fact.missing} ${fromDeal}` : fact.missing;
       const chat = fromChat ? ` ${fromChat} На Картах этого нет.` : "";
       const who = deal.assignee || "Менеджеру";
-      const when = due ? (late ? ` Срок был ${due}.` : ` Срок ${due}.`) : "";
+      const window = monthOverdue(deal.received, now);
+      const passed = window.overdue ? ` Срок был ${window.due}.` : "";
+      const whyLate = window.overdue
+        ? `Срок ${window.due} прошёл, на Картах этого нет.`
+        : (monthEdge(deal.received) ? "Месяц с получения информации ещё не прошёл." : "Даты получения информации нет.");
       return {
         title: point.title,
         stuck: point.title,
         missing,
         status: NOT_DONE,
         state: "open",
-        due,
-        say: `${who}: ${fact.missing}${when}`,
-        why: `${late && due ? `Срок ${due} прошёл, на Картах этого нет.` : due ? "Срок ещё не вышел." : "На Картах этого нет."}${chat}${pause}`,
+        overdue: window.overdue,
+        ...(window.due ? { due: window.due } : {}),
+        say: `${who}: ${fact.missing}${passed}`,
+        why: `${whyLate}${chat}${pause}`,
       };
     }
     const known = [fact.missing, fromDeal].filter((line) => line && line !== NO_DATA);
@@ -1311,7 +1348,16 @@ export function controlBrief({ maps, created, now, heard, replies, deal = {} }) 
     };
   });
   rows.sort((left, right) => Number(right.status === NOT_DONE) - Number(left.status === NOT_DONE));
-  return rows;
+  return rows.map((row) => {
+    if (row.title !== "Новости" || row.status !== DONE) return row;
+    const first = maps?.firstNews;
+    if (!first?.title && !first?.doneOn) return row;
+    return {
+      ...row,
+      ...(first.doneOn ? { doneOn: first.doneOn } : {}),
+      ...(first.title ? { firstNews: first.title } : {}),
+    };
+  });
 }
 
 function finishDay(created) {
@@ -1328,17 +1374,20 @@ export function reviewFindings(profile, context = {}) {
   if (!profile?.opened && !profile?.readable) return [];
   const findings = [];
   const finish = finishDay(context.created);
+  const rakov = normalizedTitle(profile.profileName).includes("раков") && normalizedTitle(profile.profileName).includes("двор");
   const titles = Array.isArray(profile.newsTitles) ? profile.newsTitles.filter(Boolean) : [];
-  for (const title of titles) {
-    const text = title.trim();
-    if (!/объединяет\s*$/i.test(text)) continue;
-    findings.push({
-      place: `Новость, «${text}»`,
-      wrong: text,
-      change: "Раки — гастрономическая традиция, которая объединяет гостей за столом.",
-      regulation: true,
-      deadline: finish,
-    });
+  if (rakov) {
+    for (const title of titles) {
+      const text = title.trim();
+      if (!/объединяет\s*$/i.test(text)) continue;
+      findings.push({
+        place: `Новость, «${text}»`,
+        wrong: text,
+        change: "Раки — гастрономическая традиция, которая объединяет гостей за столом.",
+        regulation: true,
+        deadline: finish,
+      });
+    }
   }
   const alts = Array.isArray(profile.photoAlts) ? profile.photoAlts.filter(Boolean) : [];
   if (alts.length > 0 && alts.every(templateCaption)) {
@@ -1346,7 +1395,9 @@ export function reviewFindings(profile, context = {}) {
     findings.push({
       place: `Видимая подпись, ${count} кадров`,
       wrong: alts[0],
-      change: "«Раковый двор», Ростов-на-Дону. Напишите, что снято на этом кадре.",
+      change: rakov
+        ? "«Раковый двор», Ростов-на-Дону. Напишите, что снято на этом кадре."
+        : "Напишите, что снято на этом кадре.",
       regulation: false,
       deadline: finish,
     });
@@ -2152,6 +2203,18 @@ async function findOpenLine(fetchImpl, base, dealId) {
   return null;
 }
 
+function informationReceived(messages) {
+  const hits = [];
+  for (const message of Array.isArray(messages) ? messages : []) {
+    const text = messageText(message);
+    if (!text.includes("информац") || !text.includes("в работу")) continue;
+    const when = messageDate(message);
+    if (when) hits.push(when);
+  }
+  hits.sort();
+  return hits[0] || "";
+}
+
 function heardFrom(messages) {
   const blob = (Array.isArray(messages) ? messages : []).map((message) => messageText(message)).join(" ");
   return {
@@ -2233,6 +2296,7 @@ async function proofFromDialog(fetchImpl, base, dealId, now, assigneeId, row) {
     }
     notes.dialog = readDialog(messages, operatorIdsFrom(line, assigneeId));
     notes.heard = heardFrom(messages);
+    notes.received = informationReceived(messages);
     let briefAt = "";
     let briefShot = "";
     for (const message of messages) {
@@ -2462,6 +2526,7 @@ async function loadOformlenieDealsNow(env = serviceEnv(), fetchImpl = fetch, now
       let finishBy = "";
       let talk = null;
       let heard = null;
+      let received = "";
       const heavy = Date.now() - started < 18000;
       if (proof && heavy) {
         finishBy = finishByText(row?.DATE_CREATE);
@@ -2480,6 +2545,7 @@ async function loadOformlenieDealsNow(env = serviceEnv(), fetchImpl = fetch, now
         brief = dialog.brief;
         talk = dialog.dialog;
         heard = dialog.heard || null;
+        received = dialog.received || "";
       }
       const late = proof ? lateMap(row?.DATE_CREATE, marks, now) : null;
       const stageFit = proof ? stageFitFor(stageName, row?.DATE_CREATE, now) : null;
@@ -2490,18 +2556,30 @@ async function loadOformlenieDealsNow(env = serviceEnv(), fetchImpl = fetch, now
         ? visible.map(({ title, state, assignee }) => ({ title, state, assignee }))
         : visible;
       const profileLink = mapsLinkForDeal(row?.TITLE, dealProfileLink(row, fields) || firstValue(row, linkFields));
-      const maps = named && heavy ? await readMapsProfile(fetchImpl, profileLink) : null;
-      const site = named ? dealSite(row, fields, profileLink) : "";
+      const showCard = item.funnel === "oformlenie" || named;
+      if (showCard && heavy && !proof) {
+        const dialog = await proofFromDialog(fetchImpl, base, field(row?.ID), now, assigneeId, row);
+        received = dialog.received || "";
+      }
+      const maps = showCard && heavy ? await readMapsProfile(fetchImpl, profileLink) : null;
+      const site = showCard ? dealSite(row, fields, profileLink) : "";
       const address = shownAddress(dealAddress(row, addressFields), maps?.addressText);
-      const report = named ? controlBrief({
+      const report = showCard ? controlBrief({
         maps,
         created: row?.DATE_CREATE,
         now,
         heard,
         replies: talk?.replies,
-        deal: { address, site, link: profileLink, assignee: people.get(assigneeId) || "", fileSeo: isRakovDeal(row?.TITLE) },
+        deal: {
+          address,
+          site,
+          link: profileLink,
+          assignee: people.get(assigneeId) || "",
+          fileSeo: isRakovDeal(row?.TITLE),
+          received,
+        },
       }) : null;
-      const review = named && maps ? reviewFindings(maps, { created: row?.DATE_CREATE, now }) : [];
+      const review = showCard && maps ? reviewFindings(maps, { created: row?.DATE_CREATE, now }) : [];
       built.set(field(row?.ID), {
         id: field(row?.ID),
         title: organizationName(row?.TITLE),

@@ -3,6 +3,7 @@ import test from "node:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { doneLabel, overdueItems } from "../src/content.js";
 import { acceptanceStatus, clearSentMemory, controlBrief, controlMessages, deliverControlChat, loadOformlenieDeals, organizationName, parseMapsProfile, pipelineSection, postReadyCards, readDialog, readyReviewLine, resetControlChatState, reviewFindings, webhookConfigured } from "./bitrix.js";
 import { resetSendFlight, sendControlOnce } from "./send-once.js";
 
@@ -380,6 +381,10 @@ test("each funnel keeps its active deals and drops a won card", async () => {
   assert.equal(ivanova.funnel, "oformlenie");
   assert.equal(ivanova.stage, "В работе");
   assert.equal(ivanova.checks.find((check) => check.code === "AM-D0-1").status, "Нет данных");
+  for (const deal of result.deals.filter((item) => item.funnel === "oformlenie")) {
+    assert.equal(Array.isArray(deal.report), true, deal.title);
+    assert.equal(deal.report.length, 11, deal.title);
+  }
   assert.equal(result.deals.find((deal) => deal.title === "Кафе Волна").funnel, "podderzhka");
   assert.equal(result.deals.find((deal) => deal.title === "Кафе Волна").link, "Нет данных");
   const packed = JSON.stringify(result);
@@ -497,6 +502,37 @@ test("a goods tab and a news tab are not missing", () => {
   });
   assert.equal(withChat.find((item) => item.title === "QR-код").status, "Сделано");
   assert.equal(withChat.find((item) => item.title === "QR-код").proof.includes("Wazzup"), true);
+});
+
+test("a missing step is overdue only a month after the information arrived", () => {
+  const maps = { opened: true, goods: 0, posts: 1, photos: 2, name: true, profileName: "Кафе", photoAlts: [] };
+  const inside = controlBrief({
+    maps,
+    now: new Date("2026-11-24T12:00:00+03:00"),
+    deal: { received: "2026-11-10T12:00:00+03:00" },
+  });
+  const early = inside.find((item) => item.title === "Товары в витрине");
+  assert.equal(early.status, "Не сделано");
+  assert.equal(early.overdue, false);
+  assert.equal(early.due, undefined);
+  const late = controlBrief({
+    maps,
+    now: new Date("2026-11-24T12:00:00+03:00"),
+    deal: { received: "2026-10-01T12:00:00+03:00" },
+  }).find((item) => item.title === "Товары в витрине");
+  assert.equal(late.overdue, true);
+  assert.equal(late.due, "30.10.2026");
+  const unknown = controlBrief({
+    maps,
+    now: new Date("2026-11-24T12:00:00+03:00"),
+    deal: {},
+  }).find((item) => item.title === "Товары в витрине");
+  assert.equal(unknown.overdue, false);
+  assert.equal(unknown.due, undefined);
+  assert.equal(overdueItems(inside).some((item) => item.title === "Товары в витрине"), false);
+  assert.equal(overdueItems([late]).length, 1);
+  assert.equal(doneLabel({ doneOn: "5 ноября 2026" }), "5 ноября 2026 · Выполнено");
+  assert.equal(doneLabel({}), "Выполнено");
 });
 
 test("a Maps profile page yields the facts it actually contains", () => {
@@ -638,6 +674,9 @@ test("the live storefront and news stay done and the review names the remaining 
   assert.equal(news.proof.includes("5 ноября"), true);
   assert.equal(news.proof.includes("Что выбрать к пенному?"), true);
   assert.equal(news.proof.includes("Морепродукты: как превратить обычный ужин в гастрономический вечер"), true);
+  assert.equal(news.firstNews, "Раки — гастрономическая традиция, которая объединяет");
+  assert.equal(news.doneOn, "5 ноября 2026");
+  assert.equal(news.overdue, undefined);
   assert.equal(rows.some((item) => item.status === "Не сделано" && /нет товаров|нет новостей/.test(item.missing || "")), false);
   const review = reviewFindings(profile, { created: "2026-10-09T10:00:00+03:00", now: new Date("2026-11-23T12:00:00+03:00") });
   assert.equal(JSON.stringify(review).includes("Нет данных"), false);

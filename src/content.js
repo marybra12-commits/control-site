@@ -6,6 +6,15 @@ export const noDeals = "Сделок в Битриксе нет.";
 
 export const noData = "Нет данных";
 
+export function doneLabel(item) {
+  const date = typeof item?.doneOn === "string" ? item.doneOn.trim() : "";
+  return date ? `${date} · Выполнено` : "Выполнено";
+}
+
+export function overdueItems(report) {
+  return (Array.isArray(report) ? report : []).filter((item) => item?.status === "Не сделано" && item.overdue);
+}
+
 export const reviewClients = [
   {
     id: "gostevoi-dom-ars",
