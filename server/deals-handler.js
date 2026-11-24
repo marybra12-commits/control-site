@@ -36,22 +36,33 @@ export function envForRequest(context, configured) {
   return { [WEBHOOK_ENV]: value };
 }
 
+function publicBitrix(sent) {
+  const reply = sent?.bitrix;
+  if (!reply || typeof reply !== "object") return null;
+  const error = String(reply.error || "").replace(/https?:\/\/\S+/gi, "").replace(/\s+/g, " ").trim();
+  const chatId = String(reply.chatId || "").replace(/https?:\/\/\S+/gi, "").replace(/^chat/i, "").trim();
+  const method = String(reply.method || "").replace(/https?:\/\/\S+/gi, "").trim();
+  if (!method) return null;
+  return { method, ok: Boolean(reply.ok), error, chatId };
+}
+
 export async function GET(_request, context, configured) {
   const env = envForRequest(context, configured);
+  let bitrix = null;
   try {
-    const sent = await sendControlOnce(env);
-    if (sent?.error) console.error(sent.error);
+    bitrix = publicBitrix(await sendControlOnce(env));
   } catch {
-    // The deal list still loads when the one-shot fails.
+    bitrix = { method: "im.message.add", ok: false, error: "Bitrix не ответил", chatId: "" };
   }
   try {
     const body = await loadOformlenieDeals(env);
+    if (bitrix) body.bitrix = bitrix;
     return Response.json(body, {
       headers: { "cache-control": "no-store" },
     });
   } catch {
     return Response.json(
-      { connected: false, unavailable: true, deals: [] },
+      { connected: false, unavailable: true, deals: [], ...(bitrix ? { bitrix } : {}) },
       { headers: { "cache-control": "no-store" } },
     );
   }

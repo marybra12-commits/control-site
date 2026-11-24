@@ -937,6 +937,10 @@ test("the first live stall opens the chat once and a restart does not send it ag
   assert.equal(first.created, false);
   assert.equal(first.posted, 1);
   assert.equal(first.error, "");
+  assert.equal(first.bitrix.method, "im.message.add");
+  assert.equal(first.bitrix.ok, true);
+  assert.equal(first.bitrix.chatId, "22");
+  assert.equal(JSON.stringify(first.bitrix).includes("http"), false);
   assert.equal(writes.some((item) => item.method === "im.chat.add.json" || item.method === "im.chat.user.add.json"), false);
   assert.equal(writes.filter((item) => item.method === "im.message.add.json").length, 1);
   assert.equal(writes.find((item) => item.method === "im.message.add.json").body.MESSAGE, "Привет");

@@ -1426,6 +1426,8 @@ export function storeSentSteps(report = {}) {
       hello: report.hello === true,
       existingHello: report.existingHello === true,
       litvinenkoHello: report.litvinenkoHello === true,
+      replyHello: report.replyHello === true,
+      method: cleanBitrix(report.method),
     }), { mode: 0o600 });
   } catch {
     // The Bitrix chat and the deal comment remain the record if the disk is read-only.
@@ -1655,8 +1657,17 @@ function cleanBitrix(text) {
   return String(text || "").replace(/https?:\/\/\S+/gi, "").replace(/\s+/g, " ").trim();
 }
 
-function litvinenkoHelloRecorded() {
-  return readSendRecord()?.litvinenkoHello === true;
+function replyHelloRecorded() {
+  return readSendRecord()?.replyHello === true;
+}
+
+function bitrixReply(method, ok, error, chatId) {
+  return {
+    method: cleanBitrix(method),
+    ok: Boolean(ok),
+    error: cleanBitrix(error),
+    chatId: cleanBitrix(chatId).replace(/^chat/i, ""),
+  };
 }
 
 function recentDialogs(result) {
@@ -1714,7 +1725,11 @@ async function findLitvinenkoChat(fetchImpl, base) {
   const maria = await findLitvinenko(fetchImpl, base);
   const recent = await postResult(fetchImpl, endpointFor(base, "im.recent.get.json"), {});
   if (!recent.ok && !recent.result) {
-    return { id: "", error: cleanBitrix(recent.errorDescription || recent.error) || maria.error || "Bitrix не ответил" };
+    return {
+      id: "",
+      method: "im.recent.get",
+      error: cleanBitrix(recent.errorDescription || recent.error) || maria.error || "Bitrix не ответил",
+    };
   }
   const ranked = [];
   for (const row of recentDialogs(recent.result)) {
@@ -1737,43 +1752,42 @@ async function findLitvinenkoChat(fetchImpl, base) {
     ranked.push({ id, score, at: Number.isFinite(parsed) ? parsed : 0 });
   }
   ranked.sort((left, right) => right.score - left.score || right.at - left.at);
-  if (ranked[0]) return { id: ranked[0].id, error: "" };
+  if (ranked[0]) return { id: ranked[0].id, method: "im.chat.get", error: "" };
   const listed = cleanBitrix(recent.errorDescription || recent.error) || maria.error;
-  return { id: "", error: listed || "В списке диалогов нет чата «Система контроля» Марии Литвиненко." };
+  return { id: "", method: maria.error ? "user.get" : "im.recent.get", error: listed || "В списке диалогов нет чата «Система контроля» Марии Литвиненко." };
+}
+
+function savedBitrixReply() {
+  const saved = readSendRecord() || {};
+  return bitrixReply(saved.method || "im.message.add", saved.delivered, saved.error, saved.chatId);
 }
 
 export async function openRakovChannel(fetchImpl, base) {
-  if (litvinenkoHelloRecorded()) {
-    const saved = readSendRecord();
-    return {
-      created: false,
-      posted: 0,
-      error: cleanBitrix(saved?.error),
-      chatId: field(saved?.chatId),
-      delivered: Boolean(saved?.delivered),
-      attempted: true,
-    };
+  if (replyHelloRecorded()) {
+    const bitrix = savedBitrixReply();
+    return { created: false, posted: 0, error: bitrix.error, chatId: bitrix.chatId, delivered: bitrix.ok, attempted: true, bitrix };
   }
   paceBypass += 1;
   try {
     const chat = await findLitvinenkoChat(fetchImpl, base);
     if (!chat.id) {
       const error = chat.error || "В списке диалогов нет чата «Система контроля» Марии Литвиненко.";
-      storeSentSteps({ litvinenkoHello: true, error, delivered: false, chatId: "" });
-      return { created: false, posted: 0, error, chatId: "", delivered: false, attempted: true };
+      const bitrix = bitrixReply(chat.method || "im.recent.get", false, error, "");
+      storeSentSteps({ replyHello: true, method: bitrix.method, error: bitrix.error, delivered: false, chatId: "" });
+      return { created: false, posted: 0, error: bitrix.error, chatId: "", delivered: false, attempted: true, bitrix };
     }
     const sent = await postResult(fetchImpl, endpointFor(base, "im.message.add.json"), {
       DIALOG_ID: `chat${chat.id}`,
       MESSAGE: "Привет",
     });
     const error = sent.ok ? "" : (cleanBitrix(sent.errorDescription || sent.error) || "Bitrix не ответил");
-    const delivered = Boolean(sent.ok && !error);
-    storeSentSteps({ litvinenkoHello: true, error, delivered, chatId: chat.id });
-    return { created: false, posted: sent.ok ? 1 : 0, error, chatId: chat.id, delivered, attempted: true };
+    const bitrix = bitrixReply("im.message.add", sent.ok && !error, error, chat.id);
+    storeSentSteps({ replyHello: true, method: bitrix.method, error: bitrix.error, delivered: bitrix.ok, chatId: bitrix.chatId });
+    return { created: false, posted: sent.ok ? 1 : 0, error: bitrix.error, chatId: bitrix.chatId, delivered: bitrix.ok, attempted: true, bitrix };
   } catch {
-    const error = "Bitrix не ответил";
-    storeSentSteps({ litvinenkoHello: true, error, delivered: false, chatId: "" });
-    return { created: false, posted: 0, error, chatId: "", delivered: false, attempted: true };
+    const bitrix = bitrixReply("im.message.add", false, "Bitrix не ответил", "");
+    storeSentSteps({ replyHello: true, method: bitrix.method, error: bitrix.error, delivered: false, chatId: "" });
+    return { created: false, posted: 0, error: bitrix.error, chatId: "", delivered: false, attempted: true, bitrix };
   } finally {
     paceBypass -= 1;
   }
