@@ -65,7 +65,8 @@ export async function GET(_request, context, configured) {
     payload.bitrix = { method: "im.message.add", ok: false, error: "Bitrix не ответил", chatId: "" };
   }
   try {
-    await postReadyOnce(env, payload.deals);
+    const review = publicBitrix(await postReadyOnce(env, payload.deals));
+    if (review) payload.bitrix = review;
   } catch {
     // The deal list is already built. A review post cannot replace it.
   }

@@ -1000,3 +1000,43 @@ test("a finished checklist is posted once into the existing chat", async () => {
   delete process.env.CONTROL_SENT_FILE;
   resetControlChatState();
 });
+
+test("the ready message uses the chat search when recent dialogs are empty", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "control-search-"));
+  process.env.CONTROL_SENT_FILE = join(dir, "sent.json");
+  resetControlChatState();
+  const writes = [];
+  const fetchImpl = async (url, options) => {
+    const method = String(url).split("/").pop();
+    const body = options?.body ? JSON.parse(options.body) : {};
+    if (method === "im.message.add.json" || method === "im.chat.add.json") writes.push({ method, body });
+    if (method === "im.chat.get.json") {
+      return { ok: true, async json() { return { result: { id: 22, name: "Система контроля", owner: 8, user_counter: 1, date_create: "24.11.2026 12:02:00", entity_type: "" } }; } };
+    }
+    const rows = {
+      "user.current.json": { ID: "8", NAME: "Мария", LAST_NAME: "Литвиненко" },
+      "im.recent.get.json": [],
+      "im.search.chat.list.json": [{ id: 22, title: "Система контроля", owner: 8 }],
+      "im.dialog.messages.get.json": { messages: [] },
+    };
+    return { ok: true, async json() { return { result: rows[method] ?? [] }; } };
+  };
+  const done = {
+    id: "31",
+    title: "Раковый двор",
+    link: "https://yandex.ru/maps/-/CXSSVWPY",
+    report: [{ title: "Новости", status: "Сделано" }],
+  };
+  const sent = await postReadyCards(fetchImpl, "https://portal.example/rest/1/token/", [done]);
+  assert.equal(sent.posted, 1);
+  assert.equal(sent.bitrix.method, "im.message.add");
+  assert.equal(sent.bitrix.ok, true);
+  assert.equal(sent.bitrix.chatId, "22");
+  assert.equal(sent.bitrix.error, "");
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].body.DIALOG_ID, "chat22");
+  assert.equal(writes[0].body.MESSAGE.includes("Карточка готова к проверке."), true);
+  assert.equal(JSON.stringify(sent.bitrix).includes("http"), false);
+  delete process.env.CONTROL_SENT_FILE;
+  resetControlChatState();
+});

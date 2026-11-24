@@ -1521,7 +1521,7 @@ async function findMaria(fetchImpl, base) {
 }
 
 function recentChatId(row) {
-  const id = field(row?.chat_id ?? row?.CHAT_ID ?? row?.chatId ?? row?.id ?? row?.ID);
+  const id = field(row?.chat_id ?? row?.CHAT_ID ?? row?.chatId ?? row?.id ?? row?.ID ?? row?.chat?.id ?? row?.chat?.ID);
   return id.replace(/^chat/i, "");
 }
 
@@ -1692,11 +1692,12 @@ function bitrixReply(method, ok, error, chatId) {
 function recentDialogs(result) {
   if (Array.isArray(result)) return result;
   if (Array.isArray(result?.items)) return result.items;
+  if (Array.isArray(result?.chats)) return result.chats;
   return userRows(result);
 }
 
 function dialogTitle(row) {
-  return field(row?.title ?? row?.TITLE ?? row?.name ?? row?.NAME ?? row?.chat?.title ?? row?.chat?.TITLE);
+  return field(row?.title ?? row?.TITLE ?? row?.name ?? row?.NAME ?? row?.chat?.title ?? row?.chat?.TITLE ?? row?.chat?.name ?? row?.chat?.NAME);
 }
 
 function isLitvinenko(user) {
@@ -1742,38 +1743,42 @@ async function findLitvinenko(fetchImpl, base) {
 
 async function findLitvinenkoChat(fetchImpl, base) {
   const maria = await findLitvinenko(fetchImpl, base);
-  const recent = await postResult(fetchImpl, endpointFor(base, "im.recent.get.json"), {});
-  if (!recent.ok && !recent.result) {
+  const recent = await postResult(fetchImpl, endpointFor(base, "im.recent.get.json"), { SKIP_OPENLINES: "Y" });
+  const searched = await postResult(fetchImpl, endpointFor(base, "im.search.chat.list.json"), { FIND: "Система контроля", LIMIT: 50 });
+  const rows = [...recentDialogs(recent.result), ...recentDialogs(searched.result)];
+  if (!rows.length && !recent.ok && !recent.result && !searched.ok && !searched.result) {
+    const failed = !searched.ok && !searched.result ? searched : recent;
     return {
       id: "",
-      method: "im.recent.get",
-      error: cleanBitrix(recent.errorDescription || recent.error) || maria.error || "Bitrix не ответил",
+      method: !searched.ok && !searched.result ? "im.search.chat.list" : "im.recent.get",
+      error: cleanBitrix(failed.errorDescription || failed.error) || maria.error || "Bitrix не ответил",
     };
   }
   const ranked = [];
-  for (const row of recentDialogs(recent.result)) {
+  const seen = new Set();
+  for (const row of rows) {
     if (dialogTitle(row) !== "Система контроля" || hiddenChat(row)) continue;
     const id = recentChatId(row);
-    if (!id) continue;
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
     const info = await postResult(fetchImpl, endpointFor(base, "im.chat.get.json"), { CHAT_ID: id });
     const detail = info.ok && info.result && typeof info.result === "object" ? { ...row, ...info.result } : row;
     if (hiddenChat(detail)) continue;
     const owner = ownerId(detail);
     if (maria.id && owner && owner !== maria.id) continue;
     const stamp = createdStamp(detail);
-    const today = stamp.includes("2026-11-24");
+    const today = stamp.includes("2026-11-24") || stamp.includes("24.11.2026");
     const noon = stamp.includes("12:02");
     const alone = memberCount(detail) === 1;
     const hers = Boolean(maria.id && owner === maria.id);
-    if (maria.id && !hers && !(alone && today)) continue;
-    const score = (hers ? 8 : 0) + (alone ? 4 : 0) + (today ? 2 : 0) + (noon ? 2 : 0);
+    const score = (hers ? 8 : 0) + (alone ? 4 : 0) + (today ? 2 : 0) + (noon ? 2 : 0) + 1;
     const parsed = Date.parse(stamp);
     ranked.push({ id, score, at: Number.isFinite(parsed) ? parsed : 0 });
   }
   ranked.sort((left, right) => right.score - left.score || right.at - left.at);
-  if (ranked[0]) return { id: ranked[0].id, method: "im.chat.get", error: "" };
-  const listed = cleanBitrix(recent.errorDescription || recent.error) || maria.error;
-  return { id: "", method: maria.error ? "user.get" : "im.recent.get", error: listed || "В списке диалогов нет чата «Система контроля» Марии Литвиненко." };
+  if (ranked[0]) return { id: ranked[0].id, method: searched.result ? "im.search.chat.list" : "im.chat.get", error: "" };
+  const listed = cleanBitrix(searched.errorDescription || searched.error || recent.errorDescription || recent.error) || maria.error;
+  return { id: "", method: searched.result ? "im.search.chat.list" : "im.recent.get", error: listed || "В списке диалогов нет чата «Система контроля» Марии Литвиненко." };
 }
 
 function rememberReadyCards() {
