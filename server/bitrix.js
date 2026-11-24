@@ -750,6 +750,24 @@ function titlesMatch(left, right) {
   return Boolean(a && b && (a === b || a.includes(b) || b.includes(a)));
 }
 
+function profileMatchesDeal(profileName, dealTitle) {
+  const name = looseTitle(profileName);
+  const deal = looseTitle(dealTitle);
+  if (!name || !deal) return false;
+  if (titlesMatch(name, deal)) return true;
+  const stems = name.split(" ").map((word) => word.replace(/[^a-zа-я0-9]/gi, "")).filter((word) => word.length >= 4);
+  return stems.length > 0 && stems.every((stem) => deal.includes(stem.slice(0, 4)));
+}
+
+function usableMaps(maps, title) {
+  if (!maps || !(maps.opened || maps.readable)) return null;
+  const dealTitle = field(title);
+  if (!dealTitle) return maps;
+  const name = field(maps.profileName);
+  if (!name || !profileMatchesDeal(name, dealTitle)) return null;
+  return maps;
+}
+
 export function profileReport(items) {
   const rows = Array.isArray(items) ? items : [];
   const groupIds = new Set(rows.filter((item) => looseTitle(item?.title).includes(PROFILE_GROUP)).map((item) => field(item?.id)));
@@ -1257,7 +1275,8 @@ function monthOverdue(received, now) {
 
 export function controlBrief({ maps, now, heard, replies, deal = {} }) {
   const slow = typeof replies === "string" && (replies.includes("реже") || replies.includes("пауза"));
-  const opened = Boolean(maps?.opened || maps?.readable);
+  const ownMaps = usableMaps(maps, deal.title);
+  const opened = Boolean(ownMaps);
   const rows = CONTROL_POINTS.map((point) => {
     if (point.key === "seo" && deal.fileSeo) {
       return {
@@ -1271,9 +1290,9 @@ export function controlBrief({ maps, now, heard, replies, deal = {} }) {
         why: "Ключевые слова записаны в Lightroom, не в подпись на Картах.",
       };
     }
-    const fact = factFor(opened ? { ...maps, fileSeo: Boolean(deal.fileSeo) } : null, point.key);
+    const fact = factFor(opened ? { ...ownMaps, fileSeo: Boolean(deal.fileSeo) } : null, point.key);
     const fromDeal = dealFact(point.key, deal);
-    const fromChat = chatFact(point.key, heard);
+    const fromChat = point.key === "qr" ? chatFact(point.key, heard) : "";
     const pause = slow ? " Клиент отвечает с паузами." : "";
     if (fact.state === "yes" && fact.proof) {
       const inFiles = point.key === "seo" && deal.fileSeo;
@@ -1300,17 +1319,17 @@ export function controlBrief({ maps, now, heard, replies, deal = {} }) {
         why: fromChat,
       };
     }
-    if (fact.state !== "no" && fromDeal) {
-      const proof = [fromDeal, fromChat].filter(Boolean).join(" ");
+    const closed = Array.isArray(deal.closed) ? deal.closed : [];
+    if (fact.state !== "no" && closed.some((title) => titlesMatch(title, point.title))) {
       return {
         title: point.title,
         stuck: "Нет",
         missing: "Нет",
         status: DONE,
         state: "closed",
-        proof,
-        say: "Ничего не говорить: след уже есть.",
-        why: proof,
+        proof: "Пункт закрыт в чек-листе этой сделки.",
+        say: "Ничего не говорить: пункт закрыт в чек-листе этой сделки.",
+        why: "Пункт закрыт в чек-листе этой сделки.",
       };
     }
     if (fact.state === "no") {
@@ -1356,7 +1375,7 @@ export function controlBrief({ maps, now, heard, replies, deal = {} }) {
   rows.sort((left, right) => Number(right.status === NOT_DONE) - Number(left.status === NOT_DONE));
   return rows.map((row) => {
     if (row.title !== "Новости" || row.status !== DONE) return row;
-    const first = maps?.firstNews;
+    const first = ownMaps?.firstNews;
     if (!first?.title && !first?.doneOn) return row;
     return {
       ...row,
@@ -1389,20 +1408,64 @@ function planStep(title, row) {
   return step;
 }
 
-function publicationStep(title, index, items, newsRow) {
-  const item = items[index];
-  if (item && (item.title || item.doneOn)) {
+const NEWS_WINDOWS = [
+  { title: "Первая новость", from: 7, to: 13 },
+  { title: "Вторая новость", from: 14, to: 20 },
+  { title: "Публикация", from: 21, to: 29 },
+];
+
+function newsInWindow(items, start, from, to) {
+  if (!start) return [];
+  return items.filter((item) => {
+    if (!item?.day) return false;
+    const offset = dayGap(start, item.day);
+    return offset !== null && offset >= from && offset <= to;
+  });
+}
+
+function publicationStep(title, from, to, items, newsRow, start) {
+  const placed = newsInWindow(items, start, from, to);
+  if (placed.length) {
+    const item = placed[0];
     const proof = [item.title ? `«${item.title}»` : "", item.doneOn || ""].filter(Boolean).join(", ");
     return {
       title,
       status: DONE,
       ...(item.doneOn ? { doneOn: item.doneOn } : {}),
       ...(proof ? { proof } : {}),
-      ...(index === 0 && item.title ? { firstNews: item.title } : {}),
+      ...(title === "Первая новость" && item.title ? { firstNews: item.title } : {}),
     };
   }
-  if (index === 0 && newsRow) return planStep(title, newsRow);
+  if (!start) return { title, status: newsRow?.status === NOT_DONE ? NOT_DONE : NO_DATA, ...(newsRow?.status === NOT_DONE && newsRow.missing ? { missing: newsRow.missing } : {}) };
+  const dated = items.filter((item) => item?.day);
+  if (newsRow?.status === NOT_DONE && !dated.length) return planStep(title, newsRow);
+  if (dated.length) return { title, status: NOT_DONE, missing: "В этой неделе публикации с датой нет." };
   return { title, status: NO_DATA };
+}
+
+export function latePublications({ news, anchor } = {}) {
+  const start = dayZeroKey(anchor);
+  if (!start) return [];
+  const items = (Array.isArray(news) ? news : []).filter((item) => item?.day && (item.title || item.doneOn));
+  const findings = [];
+  for (const slot of NEWS_WINDOWS) {
+    if (newsInWindow(items, start, slot.from, slot.to).length) continue;
+    const later = items.filter((item) => {
+      const offset = dayGap(start, item.day);
+      return offset !== null && offset > slot.to;
+    });
+    if (!later.length) continue;
+    const item = later[0];
+    const due = formatDay(addDays(start, slot.to));
+    const shown = item.title ? `«${item.title}»` : "Публикация";
+    findings.push({
+      place: slot.title,
+      wrong: item.doneOn ? `${shown} опубликована ${item.doneOn}.` : `${shown} опубликована позже этой недели.`,
+      change: `Срок этой недели был ${due}. Публикация позже плана.`,
+      late: true,
+    });
+  }
+  return findings;
 }
 
 export function monthPlan({ rows, anchor, anchorKind, news } = {}) {
@@ -1427,9 +1490,8 @@ export function monthPlan({ rows, anchor, anchorKind, news } = {}) {
       title: week.title,
       ...(start ? { due: formatDay(addDays(start, week.edge)) } : {}),
       steps: week.steps.map((title) => {
-        if (title === "Первая новость") return publicationStep(title, 0, items, newsRow);
-        if (title === "Вторая новость") return publicationStep(title, 1, items, null);
-        if (title === "Публикация") return publicationStep(title, 2, items, null);
+        const slot = NEWS_WINDOWS.find((item) => item.title === title);
+        if (slot) return publicationStep(title, slot.from, slot.to, items, title === "Первая новость" ? newsRow : null, start);
         if (title === "Правки после проверки") return { title, status: NO_DATA };
         return planStep(title, byTitle.get(title));
       }),
@@ -1466,6 +1528,16 @@ export function reviewFindings(profile, context = {}) {
         deadline: finish,
       });
     }
+  }
+  for (const reply of Array.isArray(profile.reviewReplies) ? profile.reviewReplies : []) {
+    if (!reply.includes("\u2014") && !reply.includes("\u2013")) continue;
+    findings.push({
+      place: "Ответ на отзыв",
+      wrong: reply,
+      change: "Уберите длинное тире.",
+      regulation: true,
+      deadline: finish,
+    });
   }
   const alts = Array.isArray(profile.photoAlts) ? profile.photoAlts.filter(Boolean) : [];
   if (alts.length > 0 && alts.every(templateCaption)) {
@@ -2642,28 +2714,37 @@ async function loadOformlenieDealsNow(env = serviceEnv(), fetchImpl = fetch, now
       const maps = showCard && heavy ? await readMapsProfile(fetchImpl, profileLink) : null;
       const site = showCard ? dealSite(row, fields, profileLink) : "";
       const address = shownAddress(dealAddress(row, addressFields), maps?.addressText);
+      const ownMaps = usableMaps(maps, row?.TITLE);
       const report = showCard ? controlBrief({
-        maps,
+        maps: ownMaps,
         created: row?.DATE_CREATE,
         now,
         heard,
         replies: talk?.replies,
         deal: {
+          title: row?.TITLE,
           address,
           site,
           link: profileLink,
           assignee: people.get(assigneeId) || "",
           fileSeo: isRakovDeal(row?.TITLE),
           received,
+          closed: Array.isArray(checklist)
+            ? checklist.filter((item) => item.state === "closed").map((item) => item.title)
+            : [],
         },
       }) : null;
-      const review = showCard && maps ? reviewFindings(maps, { created: row?.DATE_CREATE, now }) : [];
+      const anchor = received || row?.DATE_CREATE;
       const plan = showCard && report ? monthPlan({
         rows: report,
-        anchor: received || row?.DATE_CREATE,
+        anchor,
         anchorKind: received ? "received" : (row?.DATE_CREATE ? "task" : ""),
-        news: maps?.newsItems || [],
+        news: ownMaps?.newsItems || [],
       }) : null;
+      const review = showCard ? [
+        ...(ownMaps ? reviewFindings(ownMaps, { created: row?.DATE_CREATE, now }) : []),
+        ...latePublications({ news: ownMaps?.newsItems || [], anchor }),
+      ] : [];
       built.set(field(row?.ID), {
         id: field(row?.ID),
         title: organizationName(row?.TITLE),

@@ -313,10 +313,10 @@ function DealDetail({ section, deal, onBack }) {
           {review.length > 0 ? (
             <ol className="review-thread">
               {review.map((item) => (
-                <li key={item.place}>
+                <li key={`${item.place}:${item.wrong || item.change}`}>
                   <p className="review-place">{item.place}</p>
                   {item.wrong ? <p className="review-change">Сейчас: {item.wrong}</p> : null}
-                  <p className="review-change">Замените: {item.change}</p>
+                  <p className="review-change">{item.late ? "Позже плана: " : "Замените: "}{item.change}</p>
                 </li>
               ))}
             </ol>

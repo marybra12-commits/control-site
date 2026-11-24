@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { doneLabel, overdueItems } from "../src/content.js";
-import { acceptanceStatus, clearSentMemory, controlBrief, controlMessages, deliverControlChat, loadOformlenieDeals, monthPlan, organizationName, parseMapsProfile, pipelineSection, postReadyCards, readDialog, readyReviewLine, resetControlChatState, reviewFindings, webhookConfigured } from "./bitrix.js";
+import { acceptanceStatus, clearSentMemory, controlBrief, controlMessages, deliverControlChat, latePublications, loadOformlenieDeals, monthPlan, organizationName, parseMapsProfile, pipelineSection, postReadyCards, readDialog, readyReviewLine, resetControlChatState, reviewFindings, webhookConfigured } from "./bitrix.js";
 import { resetSendFlight, sendControlOnce } from "./send-once.js";
 
 test("missing or blank webhook stays disconnected and does not call Bitrix", async () => {
@@ -541,11 +541,30 @@ test("the month plan names the step due in each of the four weeks", () => {
   assert.equal(plan.weeks[0].steps.some((step) => step.title === "Шапка профиля"), true);
   assert.equal(plan.weeks[1].steps.some((step) => step.title === "Товары в витрине" && step.status === "Сделано"), true);
   const first = plan.weeks[1].steps.find((step) => step.title === "Первая новость");
-  assert.equal(first.status, "Сделано");
-  assert.equal(first.doneOn, "5 ноября 2026");
-  assert.equal(plan.weeks[2].steps.find((step) => step.title === "Вторая новость").doneOn, "5 ноября 2026");
+  assert.equal(first.status, "Не сделано");
+  assert.equal(first.doneOn, undefined);
   assert.equal(plan.weeks[3].steps.find((step) => step.title === "Публикация").doneOn, "5 ноября 2026");
   assert.equal(plan.weeks[3].steps.find((step) => step.title === "Правки после проверки").status, "Нет данных");
+  const late = latePublications({
+    news: [{ title: "Что выбрать к пенному?", doneOn: "5 ноября 2026", day: "2026-11-05" }],
+    anchor: "2026-10-09T12:00:00+03:00",
+  });
+  assert.equal(late.some((item) => item.place === "Первая новость" && item.late && item.wrong.includes("5 ноября 2026") && item.change.includes("22.10.2026")), true);
+  assert.equal(late.some((item) => item.place === "Публикация"), false);
+  const copied = controlBrief({
+    maps: rows && {
+      opened: true,
+      name: true,
+      profileName: "Раковый двор",
+      photos: 23,
+      goods: 91,
+      posts: 5,
+      photoAlts: ["фасад"],
+    },
+    now: new Date("2026-11-24T12:00:00+03:00"),
+    deal: { title: "ИП Иванова Анна" },
+  });
+  assert.equal(copied.every((row) => row.status !== "Сделано"), true);
   const blank = monthPlan({ rows, anchor: "", anchorKind: "", news: [] });
   assert.equal(blank.weeks.every((week) => !week.due), true);
   assert.equal(blank.anchorNote, "Даты получения информации нет.");
