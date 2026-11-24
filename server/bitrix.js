@@ -1807,19 +1807,34 @@ export async function postReadyCards(fetchImpl, base, deals) {
       LIMIT: 50,
     });
     const seen = messageList(history.result).map((row) => messageText(row));
+    const historyKnown = Boolean(history.ok);
     let posted = 0;
-    let bitrix = bitrixReply("im.message.add", true, "", chat.id);
+    let bitrix = bitrixReply("im.message.add", false, "Сообщение не отправлено", chat.id);
     for (const item of pending) {
       const needle = messageText({ text: item.line });
       if (seen.some((text) => text.includes(needle))) {
         readyPosted.add(item.id);
+        bitrix = bitrixReply("im.message.add", true, "", chat.id);
         continue;
       }
-      const sent = await postResult(fetchImpl, endpointFor(base, "im.message.add.json"), {
+      if (readyPosted.has(item.id) && !historyKnown) continue;
+      let sent = await postResult(fetchImpl, endpointFor(base, "im.message.add.json"), {
         DIALOG_ID: `chat${chat.id}`,
         MESSAGE: item.line,
       });
-      const error = sent.ok ? "" : (cleanBitrix(sent.errorDescription || sent.error) || "Bitrix не ответил");
+      let error = sent.ok ? "" : (cleanBitrix(sent.errorDescription || sent.error) || "Bitrix не ответил");
+      if (!sent.ok && /ACCESS|доступ|прав/i.test(error)) {
+        const current = await postResult(fetchImpl, endpointFor(base, "user.current.json"), {});
+        const userId = field(userRows(current.result)[0]?.ID ?? userRows(current.result)[0]?.id);
+        if (userId) {
+          await postResult(fetchImpl, endpointFor(base, "im.chat.user.add.json"), { CHAT_ID: chat.id, USERS: [userId] });
+          sent = await postResult(fetchImpl, endpointFor(base, "im.message.add.json"), {
+            DIALOG_ID: `chat${chat.id}`,
+            MESSAGE: item.line,
+          });
+          error = sent.ok ? "" : (cleanBitrix(sent.errorDescription || sent.error) || "Bitrix не ответил");
+        }
+      }
       bitrix = bitrixReply("im.message.add", sent.ok && !error, error, chat.id);
       if (!bitrix.ok) continue;
       readyPosted.add(item.id);

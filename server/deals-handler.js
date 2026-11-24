@@ -58,17 +58,18 @@ export async function GET(_request, context, configured) {
     ...body,
     deals: Array.isArray(body?.deals) ? body.deals : [],
   };
+  let review = null;
   try {
-    const bitrix = publicBitrix(await sendControlOnce(env));
-    if (bitrix) payload.bitrix = bitrix;
+    review = publicBitrix(await postReadyOnce(env, payload.deals));
   } catch {
-    payload.bitrix = { method: "im.message.add", ok: false, error: "Bitrix не ответил", chatId: "" };
+    review = null;
   }
   try {
-    const review = publicBitrix(await postReadyOnce(env, payload.deals));
-    if (review) payload.bitrix = review;
+    const bitrix = publicBitrix(await sendControlOnce(env));
+    payload.bitrix = review || bitrix || undefined;
+    if (!payload.bitrix) delete payload.bitrix;
   } catch {
-    // The deal list is already built. A review post cannot replace it.
+    payload.bitrix = review || { method: "im.message.add", ok: false, error: "Bitrix не ответил", chatId: "" };
   }
   return Response.json(payload, {
     headers: { "cache-control": "no-store" },

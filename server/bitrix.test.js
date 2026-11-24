@@ -958,17 +958,19 @@ test("a finished checklist is posted once into the existing chat", async () => {
   process.env.CONTROL_SENT_FILE = join(dir, "sent.json");
   resetControlChatState();
   const writes = [];
+  const messages = [];
   const fetchImpl = async (url, options) => {
     const method = String(url).split("/").pop();
     const body = options?.body ? JSON.parse(options.body) : {};
     if (method === "im.chat.add.json" || method === "im.message.add.json") writes.push({ method, body });
+    if (method === "im.message.add.json") messages.push({ text: body.MESSAGE });
     if (method === "im.chat.get.json") {
       return { ok: true, async json() { return { result: { id: 22, title: "Система контроля", owner: 8, user_counter: 1, date_create: "2026-11-24T12:02:00+03:00", entity_type: "" } }; } };
     }
     const rows = {
       "user.current.json": { ID: "8", NAME: "Мария", LAST_NAME: "Литвиненко" },
       "im.recent.get.json": [{ id: "chat22", chat_id: 22, title: "Система контроля", type: "chat" }],
-      "im.dialog.messages.get.json": { messages: [] },
+      "im.dialog.messages.get.json": { messages: messages.slice() },
     };
     return { ok: true, async json() { return { result: rows[method] ?? [] }; } };
   };
@@ -1037,6 +1039,51 @@ test("the ready message uses the chat search when recent dialogs are empty", asy
   assert.equal(writes[0].body.DIALOG_ID, "chat22");
   assert.equal(writes[0].body.MESSAGE.includes("Карточка готова к проверке."), true);
   assert.equal(JSON.stringify(sent.bitrix).includes("http"), false);
+  delete process.env.CONTROL_SENT_FILE;
+  resetControlChatState();
+});
+
+test("a closed chat is joined once and the review message is posted there", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "control-join-"));
+  process.env.CONTROL_SENT_FILE = join(dir, "sent.json");
+  resetControlChatState();
+  const writes = [];
+  let blocked = true;
+  const fetchImpl = async (url, options) => {
+    const method = String(url).split("/").pop();
+    const body = options?.body ? JSON.parse(options.body) : {};
+    if (method === "im.chat.add.json" || method === "im.chat.user.add.json" || method === "im.message.add.json") writes.push({ method, body });
+    if (method === "im.message.add.json" && blocked) {
+      blocked = false;
+      return { ok: false, async json() { return { error: "ACCESS_DENIED", error_description: "Доступ запрещён https://portal.example/rest/1/secret" }; } };
+    }
+    if (method === "im.chat.get.json") {
+      return { ok: true, async json() { return { result: { id: 22, title: "Система контроля", owner: 8, user_counter: 1, date_create: "2026-11-24T12:02:00+03:00", entity_type: "" } }; } };
+    }
+    const rows = {
+      "user.current.json": { ID: "8", NAME: "Мария", LAST_NAME: "Литвиненко" },
+      "im.recent.get.json": [{ id: "chat22", chat_id: 22, title: "Система контроля", type: "chat" }],
+      "im.dialog.messages.get.json": { messages: [] },
+    };
+    return { ok: true, async json() { return { result: rows[method] ?? body }; } };
+  };
+  const done = {
+    id: "31",
+    title: "Раковый двор",
+    link: "https://yandex.ru/maps/-/CXSSVWPY",
+    report: [{ title: "Новости", status: "Сделано" }],
+  };
+  const sent = await postReadyCards(fetchImpl, "https://portal.example/rest/1/token/", [done]);
+  assert.equal(sent.bitrix.method, "im.message.add");
+  assert.equal(sent.bitrix.ok, true);
+  assert.equal(sent.bitrix.chatId, "22");
+  assert.equal(sent.bitrix.error, "");
+  assert.equal(JSON.stringify(sent.bitrix).includes("http"), false);
+  assert.equal(writes.some((item) => item.method === "im.chat.add.json"), false);
+  assert.equal(writes.filter((item) => item.method === "im.chat.user.add.json").length, 1);
+  assert.equal(writes.filter((item) => item.method === "im.message.add.json").length, 2);
+  assert.equal(writes.at(-1).body.MESSAGE.includes("Карточка готова к проверке."), true);
+  assert.equal(writes.at(-1).body.DIALOG_ID, "chat22");
   delete process.env.CONTROL_SENT_FILE;
   resetControlChatState();
 });
