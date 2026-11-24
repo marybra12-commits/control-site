@@ -48,22 +48,23 @@ function publicBitrix(sent) {
 
 export async function GET(_request, context, configured) {
   const env = envForRequest(context, configured);
-  let bitrix = null;
+  let body;
   try {
-    bitrix = publicBitrix(await sendControlOnce(env));
+    body = await loadOformlenieDeals(env);
   } catch {
-    bitrix = { method: "im.message.add", ok: false, error: "Bitrix не ответил", chatId: "" };
+    body = { connected: false, unavailable: true, deals: [] };
   }
+  const payload = {
+    ...body,
+    deals: Array.isArray(body?.deals) ? body.deals : [],
+  };
   try {
-    const body = await loadOformlenieDeals(env);
-    if (bitrix) body.bitrix = bitrix;
-    return Response.json(body, {
-      headers: { "cache-control": "no-store" },
-    });
+    const bitrix = publicBitrix(await sendControlOnce(env));
+    if (bitrix) payload.bitrix = bitrix;
   } catch {
-    return Response.json(
-      { connected: false, unavailable: true, deals: [], ...(bitrix ? { bitrix } : {}) },
-      { headers: { "cache-control": "no-store" } },
-    );
+    payload.bitrix = { method: "im.message.add", ok: false, error: "Bitrix не ответил", chatId: "" };
   }
+  return Response.json(payload, {
+    headers: { "cache-control": "no-store" },
+  });
 }
