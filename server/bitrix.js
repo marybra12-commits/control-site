@@ -368,7 +368,7 @@ function funnelForCategory(name) {
   if (exact) return exact;
   const text = normalizedTitle(name);
   if (text.includes("поддерж")) return "podderzhka";
-  return "oformlenie";
+  return "";
 }
 
 function pipelinesFromCategories(result) {
@@ -2741,10 +2741,13 @@ async function loadOformlenieDealsNow(env = serviceEnv(), fetchImpl = fetch, now
     for (const row of namedFallback) {
       const id = field(row?.ID);
       if (!id || seen.has(id)) continue;
-      seen.add(id);
       const categoryId = field(row?.CATEGORY_ID);
       const pipeline = categoryName(categoryRows, categoryId);
-      rows.push({ row, funnel: funnelForCategory(pipeline), pipeline });
+      const section = funnelForCategory(pipeline);
+      if (section !== "oformlenie" && section !== "podderzhka") continue;
+      if (!isActiveDeal(row, "")) continue;
+      seen.add(id);
+      rows.push({ row, funnel: section, pipeline });
     }
 
     const assigneeIds = [...new Set(rows.map((item) => field(item.row?.ASSIGNED_BY_ID)).filter(Boolean))];
@@ -2771,7 +2774,7 @@ async function loadOformlenieDealsNow(env = serviceEnv(), fetchImpl = fetch, now
       const stageId = field(row?.STAGE_ID);
       const stageName = stages.get(stageId) ?? "";
       const named = isNamedDeal(row?.TITLE);
-      if (!named && !isActiveDeal(row, stageName)) continue;
+      if (!isActiveDeal(row, stageName)) continue;
       if (named) {
         const full = await readDeal(fetchImpl, base, field(row?.ID));
         if (full) row = { ...row, ...full };

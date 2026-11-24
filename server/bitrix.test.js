@@ -307,7 +307,6 @@ test("each funnel keeps its active deals and drops a won card", async () => {
   assert.deepEqual(result.deals.map((deal) => deal.title), [
     "Островок надежды магазин продуктов",
     "Автосделка Раковой Двор Оформление+3Д",
-    "Раковый двор на набережной",
     "ИП Иванова Анна",
     "Кафе Волна",
   ]);
@@ -361,14 +360,10 @@ test("each funnel keeps its active deals and drops a won card", async () => {
   assert.equal(rakovy.dialog.about.includes("макет"), true);
   assert.equal(rakovy.dialog.unanswered.toLowerCase().includes("жду макет"), true);
   assert.equal(rakovy.offer, "/kp-rakovy-dvor.html");
-  assert.equal(result.deals.find((deal) => deal.title === "Раковый двор на набережной").offer, undefined);
+  assert.equal(result.deals.find((deal) => deal.title === "Раковый двор на набережной"), undefined);
   assert.equal(rakovy.checklist.find((item) => item.title === "Шапка профиля").state, "closed");
   assert.equal(rakovy.checklist.find((item) => item.title === "Геолокация и вход").state, "open");
   assert.equal(rakovy.checklist.some((item) => item.title === "Настроить профиль по сделке"), false);
-  const shore = result.deals.find((deal) => deal.title === "Раковый двор на набережной");
-  assert.equal(shore.funnel, "oformlenie");
-  assert.equal(shore.pipeline, "Продажи");
-  assert.equal(shore.pilot, true);
   assert.ok(calls.some((call) => {
     if (!String(call.url).endsWith("/crm.deal.list.json")) return false;
     return JSON.parse(call.options.body).filter["%TITLE"] === "Раковой";
