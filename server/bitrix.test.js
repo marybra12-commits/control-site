@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { acceptanceStatus, controlBrief, controlMessages, deliverControlChat, loadOformlenieDeals, organizationName, parseMapsProfile, pipelineSection, readDialog, resetControlChatState, reviewFindings, webhookConfigured } from "./bitrix.js";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { acceptanceStatus, clearSentMemory, controlBrief, controlMessages, deliverControlChat, loadOformlenieDeals, organizationName, parseMapsProfile, pipelineSection, readDialog, resetControlChatState, reviewFindings, webhookConfigured } from "./bitrix.js";
+import { resetSendFlight, sendControlOnce } from "./send-once.js";
 
 test("missing or blank webhook stays disconnected and does not call Bitrix", async () => {
   assert.equal(webhookConfigured({}), false);
@@ -693,6 +697,7 @@ test("a control chat is only with Maria and names the missing method", async () 
   resetControlChatState();
   const sent = [];
   const comments = [];
+  const chats = [];
   const posted = await deliverControlChat(
     async (url, options) => {
       const method = String(url).split("/").pop();
@@ -701,6 +706,7 @@ test("a control chat is only with Maria and names the missing method", async () 
         return { ok: true, async json() { return { result: [{ ID: "3", NAME: "Мария", LAST_NAME: "Брага" }] }; } };
       }
       if (method === "im.chat.add.json") {
+        chats.push(body);
         return { ok: true, async json() { return { result: 15 }; } };
       }
       if (method === "im.message.add.json") sent.push(body);
@@ -734,6 +740,38 @@ test("a control chat is only with Maria and names the missing method", async () 
   assert.equal(comments[0].fields.ENTITY_ID, 31);
   assert.equal(comments[0].fields.COMMENT, sent[0].MESSAGE);
   assert.equal(comments.some((item) => String(item.fields.COMMENT).includes("не SEO")), false);
+  assert.equal(chats[0].TITLE, "Система контроля");
+  assert.deepEqual(chats[0].USERS, [3]);
+  assert.equal(chats[0].ENTITY_TYPE, undefined);
+});
+
+test("im.chat.add reports the Bitrix error text", async () => {
+  resetControlChatState();
+  const result = await deliverControlChat(
+    async (url) => {
+      const method = String(url).split("/").pop();
+      if (method === "user.get.json") {
+        return { ok: true, async json() { return { result: [{ ID: "3", NAME: "Мария", LAST_NAME: "Брага" }] }; } };
+      }
+      if (method === "im.chat.add.json") {
+        return { ok: true, async json() { return { error: "ACCESS_DENIED", error_description: "Доступ запрещён https://portal.bitrix24.ru/rest/1/secret" }; } };
+      }
+      return { ok: true, async json() { return { result: [] }; } };
+    },
+    "https://example.invalid/rest/1/placeholder/",
+    [{
+      id: "31",
+      title: "Автосделка Раковой Двор Оформление+3Д",
+      offer: true,
+      report: [{ title: "Витрина", status: "Не сделано", missing: "Цена стоит 1 ₽, описания нет.", due: "07.11.2026" }],
+      review: [],
+    }],
+    new Date("2026-11-23T12:00:00+03:00"),
+  );
+  assert.equal(result.missing.includes("im.chat.add"), true);
+  assert.equal(result.error.includes("Доступ запрещён"), true);
+  assert.equal(result.error.includes("http"), false);
+  assert.equal(result.error.includes("secret"), false);
 });
 
 test("SEO фото and the visible caption stay off the Bitrix message", () => {
@@ -844,4 +882,49 @@ test("the deal list and the Maps page are read once per hour", async () => {
   assert.deepEqual(writes, []);
   assert.equal(times.length >= 2 && times[1] - times[0] >= 200, true);
   resetControlChatState();
+});
+
+test("the first live stall opens the chat once and a restart does not send it again", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "control-sent-"));
+  process.env.CONTROL_SENT_FILE = join(dir, "sent.json");
+  resetControlChatState();
+  resetSendFlight();
+  const writes = [];
+  const fetchImpl = async (url, options) => {
+    const address = String(url);
+    const method = address.split("/").pop();
+    const body = options?.body ? JSON.parse(options.body) : {};
+    if (method === "im.chat.add.json" || method === "im.message.add.json" || method === "crm.timeline.comment.add.json") writes.push({ method, body });
+    if (address.includes("yandex.ru/maps")) {
+      return { ok: true, url: address, async text() { return "<title>Раковый двор</title>"; } };
+    }
+    const rows = {
+      "crm.dealcategory.list.json": [{ ID: "2", NAME: "Оформление ЯКарты/Аналитика" }],
+      "crm.deal.list.json": [{ ID: "31", TITLE: "Автосделка Раковой Двор Оформление+3Д", CATEGORY_ID: "2", STAGE_ID: "C2:NEW", ASSIGNED_BY_ID: "1", DATE_CREATE: "2026-10-09T10:00:00+03:00" }],
+      "crm.status.list.json": [{ ENTITY_ID: "DEAL_STAGE_2", STATUS_ID: "C2:NEW", NAME: "Новая" }],
+      "user.get.json": [{ ID: "3", NAME: "Мария", LAST_NAME: "Брага" }],
+      "crm.deal.get.json": { ID: "31", TITLE: "Автосделка Раковой Двор Оформление+3Д", CATEGORY_ID: "2", DATE_CREATE: "2026-10-09T10:00:00+03:00" },
+      "im.chat.add.json": 15,
+    };
+    return { ok: true, async json() { return { result: rows[method] ?? [] }; } };
+  };
+  const env = { BITRIX_WEBHOOK_URL: "https://portal.bitrix24.ru/rest/1/token/" };
+  const now = new Date("2026-11-23T12:00:00+03:00");
+  const first = await sendControlOnce(env, fetchImpl, now);
+  const after = writes.length;
+  clearSentMemory();
+  resetSendFlight();
+  const second = await sendControlOnce(env, fetchImpl, now);
+  assert.equal(first.created, true);
+  assert.equal(first.posted > 0, true);
+  assert.equal(first.error, "");
+  assert.equal(writes.some((item) => item.method === "im.chat.add.json" && item.body.TITLE === "Система контроля" && item.body.ENTITY_TYPE == null && item.body.USERS[0] === 3), true);
+  assert.equal(writes.filter((item) => item.method === "im.message.add.json").length, 1);
+  assert.equal(writes.filter((item) => item.method === "crm.timeline.comment.add.json").length, 1);
+  assert.equal(writes.some((item) => JSON.stringify(item.body).includes("SEO фото")), false);
+  assert.equal(second.posted, 0);
+  assert.equal(writes.length, after);
+  delete process.env.CONTROL_SENT_FILE;
+  resetControlChatState();
+  resetSendFlight();
 });

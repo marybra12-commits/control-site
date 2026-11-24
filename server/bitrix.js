@@ -1,3 +1,7 @@
+import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 const DEAL_LIST_METHOD = "crm.deal.list.json";
 const WEBHOOK_ENV = "BITRIX_WEBHOOK_URL";
 
@@ -10,6 +14,12 @@ export function serviceEnv() {
 export function webhookConfigured(env = serviceEnv()) {
   const value = env[WEBHOOK_ENV];
   return typeof value === "string" && value.trim() !== "";
+}
+
+function publicBitrixError(payload) {
+  const code = field(payload?.error);
+  const description = field(payload?.error_description);
+  return [code, description].filter(Boolean).join(": ").replace(/https?:\/\/\S+/gi, "").replace(/\s+/g, " ").trim();
 }
 
 function field(value) {
@@ -204,7 +214,7 @@ async function postResult(fetchImpl, endpoint, body) {
     }
     const error = field(payload?.error);
     if (!response?.ok || !payload || typeof payload !== "object" || error) {
-      return { ok: false, result: null, error };
+      return { ok: false, result: null, error, errorDescription: publicBitrixError(payload) };
     }
     return { ok: true, result: payload.result ?? null, next: payload.next, error: "" };
   } catch {
@@ -1366,17 +1376,49 @@ const postedComments = new Set();
 let controlChatId = "";
 const dealCache = new Map();
 
-export function resetControlChatState() {
+function sentFile() {
+  const proc = globalThis["process"];
+  const custom = proc?.env?.CONTROL_SENT_FILE;
+  return typeof custom === "string" && custom.trim() ? custom.trim() : join(tmpdir(), "control-site-sent.json");
+}
+
+export function rememberSentSteps() {
+  try {
+    const data = JSON.parse(readFileSync(sentFile(), "utf8"));
+    for (const key of data?.keys || []) postedSteps.add(key);
+  } catch {
+    // A missing mark means this stall has not been sent.
+  }
+}
+
+export function storeSentSteps() {
+  try {
+    writeFileSync(sentFile(), JSON.stringify({ keys: [...postedSteps] }), { mode: 0o600 });
+  } catch {
+    // The Bitrix chat and the deal comment remain the record if the disk is read-only.
+  }
+}
+
+export function clearSentMemory() {
   postedSteps.clear();
   postedMessages.clear();
   postedComments.clear();
   controlChatId = "";
+}
+
+export function resetControlChatState() {
+  clearSentMemory();
   mapsCache.clear();
   dealCache.clear();
   hourCacheOn = false;
   notBefore = 0;
   callsLeft = Infinity;
   inflightLoad = null;
+  try {
+    unlinkSync(sentFile());
+  } catch {
+    // No mark was stored.
+  }
 }
 
 function stuckStep(line) {
@@ -1398,31 +1440,56 @@ function isMaria(user) {
   return field(user?.NAME).toLowerCase() === "мария" && field(user?.LAST_NAME).toLowerCase().startsWith("браг");
 }
 
+function userRows(result) {
+  if (Array.isArray(result)) return result;
+  if (result && typeof result === "object") return Object.values(result);
+  return [];
+}
+
 async function findMaria(fetchImpl, base) {
   const listed = await postResult(fetchImpl, endpointFor(base, "user.get.json"), {
-    filter: { NAME: "Мария", LAST_NAME: "Брага", ACTIVE: true },
+    FILTER: { NAME: "Мария", LAST_NAME: "Брага", ACTIVE: "Y" },
   });
-  if (!listed.ok) return { id: "", missing: listed.error ? "user.get" : "" };
-  const rows = Array.isArray(listed.result) ? listed.result : [];
-  const maria = rows.find(isMaria);
-  return { id: maria ? field(maria.ID) : "", missing: "" };
+  let maria = userRows(listed.result).find(isMaria);
+  if (!maria) {
+    const everyone = await postResult(fetchImpl, endpointFor(base, "user.get.json"), {});
+    maria = userRows(everyone.result).find(isMaria);
+    if (!maria && !listed.ok) return { id: "", missing: listed.error ? "user.get" : "", error: listed.errorDescription || "" };
+  }
+  if (!maria) return { id: "", missing: "user.get", error: listed.errorDescription || "" };
+  return { id: field(maria.ID), missing: "", error: "" };
+}
+
+function recentChatId(row) {
+  const id = field(row?.chat_id ?? row?.CHAT_ID ?? row?.chatId ?? row?.id ?? row?.ID);
+  return id.replace(/^chat/i, "");
 }
 
 async function ensureControlChat(fetchImpl, base, mariaId) {
-  if (controlChatId) return { id: controlChatId, missing: "" };
+  if (controlChatId) return { id: controlChatId, missing: "", error: "" };
+  const recent = await postResult(fetchImpl, endpointFor(base, "im.recent.get.json"), {});
+  const recentRows = Array.isArray(recent.result)
+    ? recent.result
+    : (Array.isArray(recent.result?.items) ? recent.result.items : userRows(recent.result));
+  for (const row of recentRows) {
+    const title = field(row?.title ?? row?.TITLE ?? row?.chat?.title ?? row?.chat?.TITLE);
+    if (title !== "Система контроля") continue;
+    const id = recentChatId(row);
+    if (!id) continue;
+    controlChatId = id;
+    return { id, missing: "", error: "" };
+  }
   const created = await postResult(fetchImpl, endpointFor(base, "im.chat.add.json"), {
     TYPE: "CHAT",
     TITLE: "Система контроля",
     USERS: [Number(mariaId) || mariaId],
-    ENTITY_TYPE: "CONTROL_SITE",
-    ENTITY_ID: `maria-${mariaId}`,
   });
   const id = controlChatIdFrom(created.result);
   if (created.ok && id) {
     controlChatId = id;
-    return { id, missing: "" };
+    return { id, missing: "", error: "" };
   }
-  return { id: "", missing: created.error ? "im.chat.add" : "" };
+  return { id: "", missing: "im.chat.add", error: created.errorDescription || created.error || "" };
 }
 
 function commentText(row) {
@@ -1437,7 +1504,8 @@ async function postDealComment(fetchImpl, base, dealId, line) {
       COMMENT: line,
     },
   });
-  return sent.ok ? "" : (sent.error ? "crm.timeline.comment.add" : "");
+  if (sent.ok) return { missing: "", error: "" };
+  return { missing: "crm.timeline.comment.add", error: sent.errorDescription || sent.error || "" };
 }
 
 async function commentArchive(fetchImpl, base, dealId) {
@@ -1464,13 +1532,16 @@ export async function deliverControlChat(fetchImpl, base, jobs, now = new Date()
   }
   if (!pending.length) return { posted: 0, missing: "" };
   const failures = [];
-  const note = (method) => {
+  const errors = [];
+  const note = (method, text = "") => {
     if (method && !failures.includes(method)) failures.push(method);
+    const clean = String(text || "").replace(/https?:\/\/\S+/gi, "").replace(/\s+/g, " ").trim();
+    if (clean && !errors.includes(clean)) errors.push(clean);
   };
   const maria = await findMaria(fetchImpl, base);
-  note(maria.missing);
-  const chat = maria.id ? await ensureControlChat(fetchImpl, base, maria.id) : { id: "", missing: "" };
-  note(chat.missing);
+  note(maria.missing, maria.error);
+  const chat = maria.id ? await ensureControlChat(fetchImpl, base, maria.id) : { id: "", missing: maria.id ? "" : "user.get", error: maria.error || "" };
+  note(chat.missing, chat.error);
   const seen = new Set();
   if (chat.id) {
     const history = await postResult(fetchImpl, endpointFor(base, "im.dialog.messages.get.json"), {
@@ -1493,7 +1564,7 @@ export async function deliverControlChat(fetchImpl, base, jobs, now = new Date()
         DIALOG_ID: `chat${chat.id}`,
         MESSAGE: item.line,
       });
-      if (!sent.ok) note(sent.error ? "im.message.add" : "");
+      if (!sent.ok) note(sent.error ? "im.message.add" : "", sent.errorDescription || sent.error || "");
       else {
         postedMessages.add(item.key);
         seen.add(messageText({ text: item.line }));
@@ -1501,15 +1572,15 @@ export async function deliverControlChat(fetchImpl, base, jobs, now = new Date()
       }
     }
     if (!commentHas && item.id) {
-      const missing = await postDealComment(fetchImpl, base, item.id, item.line);
-      if (missing) note(missing);
+      const comment = await postDealComment(fetchImpl, base, item.id, item.line);
+      if (comment.missing) note(comment.missing, comment.error);
       else postedComments.add(item.key);
     }
     const messageSettled = chatHas || postedMessages.has(item.key) || !chat.id;
     const commentSettled = commentHas || postedComments.has(item.key) || !item.id;
     if (messageSettled && commentSettled) postedSteps.add(item.key);
   }
-  return { posted, missing: failures.join(", ") };
+  return { posted, missing: failures.join(", "), error: errors.join("; "), chatId: chat.id || "" };
 }
 
 export function managerRows(items, created, now) {

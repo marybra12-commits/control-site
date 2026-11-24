@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize, sep } from "node:path";
 import { GET } from "./deals-handler.js";
+import { sendControlOnce } from "./send-once.js";
 
 function publishedWebhook() {
   try {
@@ -93,4 +94,6 @@ createServer(async (req, res) => {
     res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
     res.end("App shell is missing.");
   }
-}).listen(port, "0.0.0.0");
+}).listen(port, "0.0.0.0", () => {
+  sendControlOnce().catch(() => {});
+});
