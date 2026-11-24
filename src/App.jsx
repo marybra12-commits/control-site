@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { adsNote, disconnectedLine, emptyState, noData, reviewClients, reviewGap, sections } from "./content.js";
+import { adsNote, disconnectedLine, emptyState, noData, reviewClients, reviewGap, sections, trends } from "./content.js";
 
 function sectionFromHash() {
   const id = window.location.hash.replace(/^#/, "").split("/")[0];
@@ -48,7 +48,7 @@ function keepStage(key, stage) {
 }
 
 function dealsForSection(section, deals) {
-  if (section.id === "reklama" || section.id === "otzyvy") return [];
+  if (section.id === "reklama" || section.id === "otzyvy" || section.id === "tendentsii") return [];
   if (section.funnel) return deals.filter((deal) => deal.funnel === section.funnel);
   return deals;
 }
@@ -95,6 +95,23 @@ function checklist(section, deal) {
       image: done ? image : "",
     };
   });
+}
+
+function Trends() {
+  return (
+    <ul className="trends">
+      {trends.map((article) => (
+        <li key={article.href} className="card trend">
+          <p className="trend-date">{article.date}</p>
+          <h2 className="trend-title">{article.title}</h2>
+          <p className="trend-summary">{article.summary}</p>
+          <a className="trend-source" href={article.href} target="_blank" rel="noreferrer">
+            {article.source}
+          </a>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 function ReviewsTable({ deals }) {
@@ -637,7 +654,9 @@ export default function App() {
             <p className="line">{section.line}</p>
           </header>
 
-          {section.id === "reklama" ? (
+          {section.id === "tendentsii" ? (
+            <Trends />
+          ) : section.id === "reklama" ? (
             <section className="card empty-card">
               <p>{adsNote}</p>
             </section>

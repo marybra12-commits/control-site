@@ -164,17 +164,12 @@ test("the deal list is ready before the greeting and stays when the post fails",
     await withEnv("https://portal.example/rest/1/token/", async () => {
       const response = await apiGet(new Request("http://127.0.0.1/api/oformlenie"));
       const body = await response.json();
-      const listed = order.indexOf("crm.deal.list.json");
-      const posted = order.indexOf("im.message.add.json");
       assert.equal(body.connected, true);
       assert.equal(body.unavailable, undefined);
       assert.equal(body.deals[0].title, "Карточка");
-      assert.equal(listed >= 0 && posted > listed, true);
-      assert.equal(body.bitrix.method, "im.message.add");
-      assert.equal(body.bitrix.ok, false);
-      assert.equal(body.bitrix.chatId, "22");
-      assert.equal(body.bitrix.error.includes("http"), false);
-      assert.equal(body.bitrix.error.includes("Чат закрыт"), true);
+      assert.equal(order.includes("im.message.add.json"), false);
+      assert.equal(order.includes("im.chat.add.json"), false);
+      assert.equal(body.bitrix, undefined);
       assert.equal(JSON.stringify(body).includes("portal.example"), false);
     });
   } finally {

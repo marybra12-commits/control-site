@@ -1,5 +1,4 @@
 import { loadOformlenieDeals, serviceEnv } from "./bitrix.js";
-import { postReadyOnce, sendControlOnce } from "./send-once.js";
 
 const WEBHOOK_ENV = "BITRIX_WEBHOOK_URL";
 
@@ -36,42 +35,20 @@ export function envForRequest(context, configured) {
   return { [WEBHOOK_ENV]: value };
 }
 
-function publicBitrix(sent) {
-  const reply = sent?.bitrix;
-  if (!reply || typeof reply !== "object") return null;
-  const error = String(reply.error || "").replace(/https?:\/\/\S+/gi, "").replace(/\s+/g, " ").trim();
-  const chatId = String(reply.chatId || "").replace(/https?:\/\/\S+/gi, "").replace(/^chat/i, "").trim();
-  const method = String(reply.method || "").replace(/https?:\/\/\S+/gi, "").trim();
-  if (!method) return null;
-  return { method, ok: Boolean(reply.ok), error, chatId };
-}
-
 export async function GET(_request, context, configured) {
   const env = envForRequest(context, configured);
-  let body;
   try {
-    body = await loadOformlenieDeals(env);
+    const body = await loadOformlenieDeals(env);
+    return Response.json({
+      ...body,
+      deals: Array.isArray(body?.deals) ? body.deals : [],
+    }, {
+      headers: { "cache-control": "no-store" },
+    });
   } catch {
-    body = { connected: false, unavailable: true, deals: [] };
+    return Response.json(
+      { connected: false, unavailable: true, deals: [] },
+      { headers: { "cache-control": "no-store" } },
+    );
   }
-  const payload = {
-    ...body,
-    deals: Array.isArray(body?.deals) ? body.deals : [],
-  };
-  let review = null;
-  try {
-    review = publicBitrix(await postReadyOnce(env, payload.deals));
-  } catch {
-    review = null;
-  }
-  try {
-    const bitrix = publicBitrix(await sendControlOnce(env));
-    payload.bitrix = review || bitrix || undefined;
-    if (!payload.bitrix) delete payload.bitrix;
-  } catch {
-    payload.bitrix = review || { method: "im.message.add", ok: false, error: "Bitrix не ответил", chatId: "" };
-  }
-  return Response.json(payload, {
-    headers: { "cache-control": "no-store" },
-  });
 }
