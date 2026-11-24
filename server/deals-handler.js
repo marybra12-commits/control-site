@@ -1,5 +1,5 @@
 import { loadOformlenieDeals, serviceEnv } from "./bitrix.js";
-import { sendControlOnce } from "./send-once.js";
+import { postReadyOnce, sendControlOnce } from "./send-once.js";
 
 const WEBHOOK_ENV = "BITRIX_WEBHOOK_URL";
 
@@ -63,6 +63,11 @@ export async function GET(_request, context, configured) {
     if (bitrix) payload.bitrix = bitrix;
   } catch {
     payload.bitrix = { method: "im.message.add", ok: false, error: "Bitrix не ответил", chatId: "" };
+  }
+  try {
+    await postReadyOnce(env, payload.deals);
+  } catch {
+    // The deal list is already built. A review post cannot replace it.
   }
   return Response.json(payload, {
     headers: { "cache-control": "no-store" },

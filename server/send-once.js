@@ -1,7 +1,8 @@
-import { openRakovChannel, webhookConfigured } from "./bitrix.js";
+import { openRakovChannel, postReadyCards, webhookConfigured } from "./bitrix.js";
 
 const WEBHOOK_ENV = "BITRIX_WEBHOOK_URL";
 let flight = null;
+let readyTail = Promise.resolve();
 
 function literalWebhook() {
   try {
@@ -33,6 +34,15 @@ async function run(env, fetchImpl, now) {
 
 export function resetSendFlight() {
   flight = null;
+  readyTail = Promise.resolve();
+}
+
+export function postReadyOnce(env = null, deals = [], fetchImpl = fetch) {
+  const base = liveBase(env);
+  if (!base) return Promise.resolve({ posted: 0, bitrix: null });
+  const run = readyTail.then(() => postReadyCards(fetchImpl, base, deals));
+  readyTail = run.then(() => {}, () => {});
+  return run;
 }
 
 export function sendControlOnce(env = null, fetchImpl = fetch, now = new Date()) {

@@ -3,7 +3,7 @@ import test from "node:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { acceptanceStatus, clearSentMemory, controlBrief, controlMessages, deliverControlChat, loadOformlenieDeals, organizationName, parseMapsProfile, pipelineSection, readDialog, resetControlChatState, reviewFindings, webhookConfigured } from "./bitrix.js";
+import { acceptanceStatus, clearSentMemory, controlBrief, controlMessages, deliverControlChat, loadOformlenieDeals, organizationName, parseMapsProfile, pipelineSection, postReadyCards, readDialog, readyReviewLine, resetControlChatState, reviewFindings, webhookConfigured } from "./bitrix.js";
 import { resetSendFlight, sendControlOnce } from "./send-once.js";
 
 test("missing or blank webhook stays disconnected and does not call Bitrix", async () => {
@@ -951,4 +951,52 @@ test("the first live stall opens the chat once and a restart does not send it ag
   delete process.env.CONTROL_SENT_FILE;
   resetControlChatState();
   resetSendFlight();
+});
+
+test("a finished checklist is posted once into the existing chat", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "control-ready-"));
+  process.env.CONTROL_SENT_FILE = join(dir, "sent.json");
+  resetControlChatState();
+  const writes = [];
+  const fetchImpl = async (url, options) => {
+    const method = String(url).split("/").pop();
+    const body = options?.body ? JSON.parse(options.body) : {};
+    if (method === "im.chat.add.json" || method === "im.message.add.json") writes.push({ method, body });
+    if (method === "im.chat.get.json") {
+      return { ok: true, async json() { return { result: { id: 22, title: "Система контроля", owner: 8, user_counter: 1, date_create: "2026-11-24T12:02:00+03:00", entity_type: "" } }; } };
+    }
+    const rows = {
+      "user.current.json": { ID: "8", NAME: "Мария", LAST_NAME: "Литвиненко" },
+      "im.recent.get.json": [{ id: "chat22", chat_id: 22, title: "Система контроля", type: "chat" }],
+      "im.dialog.messages.get.json": { messages: [] },
+    };
+    return { ok: true, async json() { return { result: rows[method] ?? [] }; } };
+  };
+  const done = {
+    id: "31",
+    title: "Раковый двор",
+    link: "https://yandex.ru/maps/-/CXSSVWPY",
+    report: [
+      { title: "Новости", status: "Сделано" },
+      { title: "SEO фото", status: "Сделано" },
+    ],
+  };
+  const open = { ...done, id: "32", report: [{ title: "Новости", status: "Не сделано" }] };
+  assert.equal(readyReviewLine(open), "");
+  const line = readyReviewLine(done);
+  assert.equal(line.includes("Раковый двор"), true);
+  assert.equal(line.includes("https://yandex.ru/maps/-/CXSSVWPY"), true);
+  assert.equal(line.includes("Карточка готова к проверке."), true);
+  const base = "https://portal.example/rest/1/token/";
+  const first = await postReadyCards(fetchImpl, base, [done, open]);
+  clearSentMemory();
+  const second = await postReadyCards(fetchImpl, base, [done, open]);
+  assert.equal(first.posted, 1);
+  assert.equal(second.posted, 0);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].method, "im.message.add.json");
+  assert.equal(writes[0].body.DIALOG_ID, "chat22");
+  assert.equal(writes[0].body.MESSAGE, line);
+  delete process.env.CONTROL_SENT_FILE;
+  resetControlChatState();
 });

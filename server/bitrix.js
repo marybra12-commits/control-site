@@ -1354,6 +1354,15 @@ export function reviewFindings(profile, context = {}) {
   return findings;
 }
 
+export function readyReviewLine(deal) {
+  const report = Array.isArray(deal?.report) ? deal.report : [];
+  if (!report.length || report.some((item) => item?.status !== DONE)) return "";
+  const title = field(deal?.title) || "Сделка";
+  const link = field(deal?.link);
+  const maps = /^https?:\/\//i.test(link) ? link : "";
+  return [title, maps, "Карточка готова к проверке."].filter(Boolean).join("\n");
+}
+
 export function controlMessages(job, now = new Date()) {
   const title = field(job?.title) || "Сделка";
   const report = Array.isArray(job?.report) ? job.report : [];
@@ -1386,6 +1395,7 @@ export function controlMessages(job, now = new Date()) {
 const postedSteps = new Set();
 const postedMessages = new Set();
 const postedComments = new Set();
+const readyPosted = new Set();
 let controlChatId = "";
 const dealCache = new Map();
 
@@ -1410,24 +1420,32 @@ export function openingDelivered() {
 
 export function rememberSentSteps() {
   const data = readSendRecord();
+  for (const id of data?.readyIds || []) readyPosted.add(String(id));
   if (!data?.delivered) return;
   for (const key of data.keys || []) postedSteps.add(key);
 }
 
 export function storeSentSteps(report = {}) {
-  const error = String(report.error || "").replace(/https?:\/\/\S+/gi, "").replace(/\s+/g, " ").trim();
-  const chatId = String(report.chatId || "").replace(/https?:\/\/\S+/gi, "").trim();
+  const previous = readSendRecord() || {};
+  const error = cleanBitrix(report.error !== undefined ? report.error : previous.error);
+  const chatId = cleanBitrix(report.chatId !== undefined ? report.chatId : previous.chatId).replace(/^chat/i, "");
+  const readyIds = [...new Set(
+    [...(Array.isArray(previous.readyIds) ? previous.readyIds : []), ...(Array.isArray(report.readyIds) ? report.readyIds : [])]
+      .map((id) => cleanBitrix(id))
+      .filter(Boolean),
+  )];
   try {
     writeFileSync(sentFile(), JSON.stringify({
       keys: [...postedSteps],
       error,
-      delivered: Boolean(report.delivered && chatId),
+      delivered: report.delivered !== undefined ? Boolean(report.delivered && chatId) : Boolean(previous.delivered),
       chatId,
-      hello: report.hello === true,
-      existingHello: report.existingHello === true,
-      litvinenkoHello: report.litvinenkoHello === true,
-      replyHello: report.replyHello === true,
-      method: cleanBitrix(report.method),
+      hello: report.hello === true || previous.hello === true,
+      existingHello: report.existingHello === true || previous.existingHello === true,
+      litvinenkoHello: report.litvinenkoHello === true || previous.litvinenkoHello === true,
+      replyHello: report.replyHello === true || previous.replyHello === true,
+      method: cleanBitrix(report.method !== undefined ? report.method : previous.method),
+      readyIds,
     }), { mode: 0o600 });
   } catch {
     // The Bitrix chat and the deal comment remain the record if the disk is read-only.
@@ -1438,6 +1456,7 @@ export function clearSentMemory() {
   postedSteps.clear();
   postedMessages.clear();
   postedComments.clear();
+  readyPosted.clear();
   controlChatId = "";
 }
 
@@ -1755,6 +1774,62 @@ async function findLitvinenkoChat(fetchImpl, base) {
   if (ranked[0]) return { id: ranked[0].id, method: "im.chat.get", error: "" };
   const listed = cleanBitrix(recent.errorDescription || recent.error) || maria.error;
   return { id: "", method: maria.error ? "user.get" : "im.recent.get", error: listed || "В списке диалогов нет чата «Система контроля» Марии Литвиненко." };
+}
+
+function rememberReadyCards() {
+  for (const id of readSendRecord()?.readyIds || []) readyPosted.add(String(id));
+}
+
+export async function postReadyCards(fetchImpl, base, deals) {
+  rememberReadyCards();
+  const pending = [];
+  for (const deal of Array.isArray(deals) ? deals : []) {
+    const id = field(deal?.id);
+    const line = readyReviewLine(deal);
+    if (!id || !line || readyPosted.has(id)) continue;
+    pending.push({ id, line });
+  }
+  if (!pending.length) return { posted: 0, bitrix: null };
+  paceBypass += 1;
+  try {
+    const chat = await findLitvinenkoChat(fetchImpl, base);
+    if (!chat.id) {
+      const bitrix = bitrixReply(chat.method || "im.recent.get", false, chat.error || "В списке диалогов нет чата «Система контроля» Марии Литвиненко.", "");
+      return { posted: 0, bitrix };
+    }
+    const history = await postResult(fetchImpl, endpointFor(base, "im.dialog.messages.get.json"), {
+      DIALOG_ID: `chat${chat.id}`,
+      LIMIT: 50,
+    });
+    const seen = messageList(history.result).map((row) => messageText(row));
+    let posted = 0;
+    let bitrix = bitrixReply("im.message.add", true, "", chat.id);
+    for (const item of pending) {
+      const needle = messageText({ text: item.line });
+      if (seen.some((text) => text.includes(needle))) {
+        readyPosted.add(item.id);
+        continue;
+      }
+      const sent = await postResult(fetchImpl, endpointFor(base, "im.message.add.json"), {
+        DIALOG_ID: `chat${chat.id}`,
+        MESSAGE: item.line,
+      });
+      const error = sent.ok ? "" : (cleanBitrix(sent.errorDescription || sent.error) || "Bitrix не ответил");
+      bitrix = bitrixReply("im.message.add", sent.ok && !error, error, chat.id);
+      if (!bitrix.ok) continue;
+      readyPosted.add(item.id);
+      seen.push(needle);
+      posted += 1;
+    }
+    if (readyPosted.size) {
+      storeSentSteps({ readyIds: [...readyPosted] });
+    }
+    return { posted, bitrix };
+  } catch {
+    return { posted: 0, bitrix: bitrixReply("im.message.add", false, "Bitrix не ответил", "") };
+  } finally {
+    paceBypass -= 1;
+  }
 }
 
 function savedBitrixReply() {
