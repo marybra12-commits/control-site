@@ -905,18 +905,25 @@ test("the first live stall opens the chat once and a restart does not send it ag
   process.env.CONTROL_SENT_FILE = join(dir, "sent.json");
   resetControlChatState();
   resetSendFlight();
-  writeFileSync(process.env.CONTROL_SENT_FILE, JSON.stringify({ hello: true, error: "старая попытка", delivered: false, chatId: "" }));
+  writeFileSync(process.env.CONTROL_SENT_FILE, JSON.stringify({ hello: true, existingHello: true, error: "старая попытка", delivered: true, chatId: "15" }));
   const writes = [];
   const fetchImpl = async (url, options) => {
     const address = String(url);
     const method = address.split("/").pop();
     const body = options?.body ? JSON.parse(options.body) : {};
     if (method === "im.chat.add.json" || method === "im.message.add.json" || method === "crm.timeline.comment.add.json" || method === "im.chat.user.add.json") writes.push({ method, body });
-    if (address.includes("yandex.ru/maps")) {
-      return { ok: true, url: address, async text() { return "<title>Раковый двор</title>"; } };
+    if (method === "im.chat.get.json") {
+      const detail = String(body.CHAT_ID) === "22"
+        ? { id: 22, title: "Система контроля", owner: 8, user_counter: 1, date_create: "2026-11-24T12:02:00+03:00", entity_type: "" }
+        : { id: 15, title: "Система контроля", owner: 3, user_counter: 2, date_create: "2026-11-20T10:00:00+03:00", entity_type: "" };
+      return { ok: true, async json() { return { result: detail }; } };
     }
     const rows = {
-      "im.recent.get.json": [{ id: "chat15", chat_id: 15, title: "Система контроля", type: "chat" }],
+      "user.current.json": { ID: "8", NAME: "Мария", LAST_NAME: "Литвиненко" },
+      "im.recent.get.json": [
+        { id: "chat15", chat_id: 15, title: "Система контроля", type: "chat" },
+        { id: "chat22", chat_id: 22, title: "Система контроля", type: "chat" },
+      ],
     };
     return { ok: true, async json() { return { result: rows[method] ?? [] }; } };
   };
@@ -933,7 +940,7 @@ test("the first live stall opens the chat once and a restart does not send it ag
   assert.equal(writes.some((item) => item.method === "im.chat.add.json" || item.method === "im.chat.user.add.json"), false);
   assert.equal(writes.filter((item) => item.method === "im.message.add.json").length, 1);
   assert.equal(writes.find((item) => item.method === "im.message.add.json").body.MESSAGE, "Привет");
-  assert.equal(writes.find((item) => item.method === "im.message.add.json").body.DIALOG_ID, "chat15");
+  assert.equal(writes.find((item) => item.method === "im.message.add.json").body.DIALOG_ID, "chat22");
   assert.equal(writes.filter((item) => item.method === "crm.timeline.comment.add.json").length, 0);
   assert.equal(second.posted, 0);
   assert.equal(writes.length, after);
