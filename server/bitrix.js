@@ -1216,6 +1216,18 @@ export function controlBrief({ maps, created, now, heard, replies, deal = {} }) 
   const slow = typeof replies === "string" && (replies.includes("реже") || replies.includes("пауза"));
   const opened = Boolean(maps?.opened || maps?.readable);
   const rows = CONTROL_POINTS.map((point) => {
+    if (point.key === "seo" && deal.fileSeo) {
+      return {
+        title: point.title,
+        stuck: "Нет",
+        missing: "Нет",
+        status: DONE,
+        state: "closed",
+        proof: "Ключевые слова записаны в файлы фото в Lightroom, не в видимую подпись на Картах.",
+        say: "Ничего не говорить: ключевые слова в файлах фото.",
+        why: "Ключевые слова записаны в Lightroom, не в подпись на Картах.",
+      };
+    }
     const fact = factFor(opened ? { ...maps, fileSeo: Boolean(deal.fileSeo) } : null, point.key);
     const fromDeal = dealFact(point.key, deal);
     const fromChat = chatFact(point.key, heard);
@@ -1314,15 +1326,14 @@ export function reviewFindings(profile, context = {}) {
   if (!profile?.opened && !profile?.readable) return [];
   const findings = [];
   const finish = finishDay(context.created);
-  const names = Array.isArray(profile.goodsNames) ? profile.goodsNames.filter(Boolean) : [];
-  const prices = Array.isArray(profile.goodsPrices) ? profile.goodsPrices.filter(Boolean) : [];
-  const placeholderPrice = prices.length > 0 && prices.every((price) => price === "1 ₽" || /^1\s*р/i.test(price));
-  if (names.length && placeholderPrice && profile.goodsDescribed !== true) {
-    const shown = names.slice(0, 3).map((name) => `«${name}»`).join(", ");
+  const titles = Array.isArray(profile.newsTitles) ? profile.newsTitles.filter(Boolean) : [];
+  for (const title of titles) {
+    const text = title.trim();
+    if (!/объединяет\s*$/i.test(text)) continue;
     findings.push({
-      place: `Витрина, ${shown}`,
-      wrong: "1 ₽",
-      change: "Цена из прайса. Полное описание и короткое описание у этой позиции.",
+      place: `Новость, «${text}»`,
+      wrong: text,
+      change: "Раки — гастрономическая традиция, которая объединяет гостей за столом.",
       regulation: true,
       deadline: finish,
     });
@@ -1333,7 +1344,7 @@ export function reviewFindings(profile, context = {}) {
     findings.push({
       place: `Видимая подпись, ${count} кадров`,
       wrong: alts[0],
-      change: "Напишите, что снято на этом кадре.",
+      change: "«Раковый двор», Ростов-на-Дону. Напишите, что снято на этом кадре.",
       regulation: false,
       deadline: finish,
     });
@@ -1447,17 +1458,19 @@ function userRows(result) {
 }
 
 async function findMaria(fetchImpl, base) {
-  const listed = await postResult(fetchImpl, endpointFor(base, "user.get.json"), {
-    FILTER: { NAME: "Мария", LAST_NAME: "Брага", ACTIVE: "Y" },
-  });
-  let maria = userRows(listed.result).find(isMaria);
-  if (!maria) {
-    const everyone = await postResult(fetchImpl, endpointFor(base, "user.get.json"), {});
-    maria = userRows(everyone.result).find(isMaria);
-    if (!maria && !listed.ok) return { id: "", missing: listed.error ? "user.get" : "", error: listed.errorDescription || "" };
+  const attempts = [
+    ["user.get.json", { FILTER: { NAME: "Мария", LAST_NAME: "Брага", ACTIVE: "Y" } }],
+    ["user.search.json", { FIND: "Мария Брага" }],
+    ["user.get.json", {}],
+  ];
+  let lastError = "";
+  for (const [method, body] of attempts) {
+    const listed = await postResult(fetchImpl, endpointFor(base, method), body);
+    if (listed.errorDescription) lastError = listed.errorDescription;
+    const maria = userRows(listed.result).find(isMaria);
+    if (maria) return { id: field(maria.ID), missing: "", error: "" };
   }
-  if (!maria) return { id: "", missing: "user.get", error: listed.errorDescription || "" };
-  return { id: field(maria.ID), missing: "", error: "" };
+  return { id: "", missing: "user.get", error: lastError };
 }
 
 function recentChatId(row) {

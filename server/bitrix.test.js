@@ -607,6 +607,7 @@ test("the live storefront and news stay done and the review names the remaining 
         items: [
           { publicationTime: 1793874674218, text: "Что выбрать к пенному? Секреты удачных сочетаний напитков и закусок  Хорошо подобранная закуска" },
           { publicationTime: 1793874630612, text: "Морепродукты: как превратить обычный ужин в гастрономический вечер  Для маленького праздника" },
+          { publicationTime: 1793874600000, text: "Раки — гастрономическая традиция, которая объединяет  Есть блюда, которые мы выбираем не только ради вкуса." },
         ],
       },
       reviewResults: { reviews: [
@@ -640,8 +641,9 @@ test("the live storefront and news stay done and the review names the remaining 
   assert.equal(rows.some((item) => item.status === "Не сделано" && /нет товаров|нет новостей/.test(item.missing || "")), false);
   const review = reviewFindings(profile, { created: "2026-10-09T10:00:00+03:00", now: new Date("2026-11-23T12:00:00+03:00") });
   assert.equal(JSON.stringify(review).includes("Нет данных"), false);
-  assert.equal(review.some((item) => item.place.includes("Раки гиганты") && item.wrong === "1 ₽" && item.change.includes("прайса")), true);
-  assert.equal(review.some((item) => item.place.startsWith("Видимая подпись") && item.wrong.includes("фото") && item.change.includes("что снято")), true);
+  assert.equal(review.some((item) => item.place.startsWith("Новость") && item.wrong.endsWith("объединяет") && item.change.includes("гостей за столом")), true);
+  assert.equal(review.some((item) => item.place.startsWith("Видимая подпись") && item.wrong.includes("фото") && item.change.includes("«Раковый двор»") && item.change.includes("что снято")), true);
+  assert.equal(review.some((item) => item.wrong === "1 ₽"), false);
   assert.equal(rows.find((item) => item.title === "SEO фото").status, "Сделано");
   assert.equal(rows.find((item) => item.title === "SEO фото").proof.includes("Lightroom"), true);
   assert.equal(JSON.stringify(rows).includes("не SEO"), false);
@@ -657,7 +659,8 @@ test("the live storefront and news stay done and the review names the remaining 
   assert.equal(lines[0].startsWith("Автосделка Раковой Двор Оформление+3Д. Шаг:"), true);
   assert.equal(lines.some((line) => /нет товаров|нет новостей/.test(line)), false);
   assert.equal(lines.some((line) => /SEO фото|не SEO/.test(line)), false);
-  assert.equal(lines.some((line) => line.includes("Раки гиганты") && line.includes("Срок:")), true);
+  assert.equal(lines.some((line) => line.includes("которая объединяет") && line.includes("Срок:")), true);
+  assert.equal(lines.some((line) => line.includes("Видимая подпись")), false);
   assert.equal(lines.some((line) => /Rakoviy|свой сайт|Благодарим/.test(line)), false);
 });
 
@@ -772,6 +775,19 @@ test("im.chat.add reports the Bitrix error text", async () => {
   assert.equal(result.error.includes("Доступ запрещён"), true);
   assert.equal(result.error.includes("http"), false);
   assert.equal(result.error.includes("secret"), false);
+});
+
+test("Rakov SEO stays done when the Maps page did not open", () => {
+  const rows = controlBrief({
+    maps: null,
+    created: "2026-10-09T10:00:00+03:00",
+    now: new Date("2026-11-24T07:50:00Z"),
+    deal: { fileSeo: true },
+  });
+  const seo = rows.find((item) => item.title === "SEO фото");
+  assert.equal(seo.status, "Сделано");
+  assert.equal(seo.proof.includes("Lightroom"), true);
+  assert.equal(JSON.stringify(rows).includes("не SEO"), false);
 });
 
 test("SEO фото and the visible caption stay off the Bitrix message", () => {

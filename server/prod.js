@@ -95,5 +95,7 @@ createServer(async (req, res) => {
     res.end("App shell is missing.");
   }
 }).listen(port, "0.0.0.0", () => {
-  sendControlOnce().catch(() => {});
+  sendControlOnce().then((result) => {
+    if (result?.error) console.error(result.error);
+  }).catch(() => {});
 });
