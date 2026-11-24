@@ -1,9 +1,4 @@
 import { GET as readDeals } from "../../../server/deals-handler.js";
-import { sendControlOnce } from "../../../server/send-once.js";
-
-queueMicrotask(() => {
-  sendControlOnce().catch(() => {});
-});
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
