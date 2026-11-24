@@ -825,10 +825,24 @@ dd {
 .reviews {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed;
   font-family: "Montserrat", sans-serif;
   font-size: 14px;
   font-weight: 400;
 }
+
+.reviews th:nth-child(1),
+.reviews td:nth-child(1) { width: 16%; }
+.reviews th:nth-child(2),
+.reviews td:nth-child(2) { width: 14%; }
+.reviews th:nth-child(3),
+.reviews td:nth-child(3) { width: 12%; }
+.reviews th:nth-child(4),
+.reviews td:nth-child(4) { width: 26%; }
+.reviews th:nth-child(5),
+.reviews td:nth-child(5) { width: 12%; }
+.reviews th:nth-child(6),
+.reviews td:nth-child(6) { width: 20%; }
 
 .reviews th,
 .reviews td {
@@ -836,12 +850,32 @@ dd {
   border-bottom: 1px solid var(--line);
   text-align: left;
   vertical-align: top;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .reviews td.reviews-facts {
   white-space: normal;
-  min-width: 240px;
+}
+
+.shot-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.shot-list p,
+.reviews-sub {
+  margin: 0 0 4px;
+}
+
+.shot-list span {
+  color: var(--muted);
+  margin-right: 6px;
+}
+
+.reviews td.reviews-pay {
+  white-space: normal;
 }
 
 .reviews-note {
@@ -862,6 +896,10 @@ dd {
 }
 
 @media (max-width: 800px) {
+  .reviews {
+    min-width: 720px;
+  }
+
   .shell {
     flex-direction: column;
   }

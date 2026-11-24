@@ -20,15 +20,21 @@ export const reviewClients = [
     id: "gostevoi-dom-ars",
     organization: "Гостевой дом Арс",
     purchased: noData,
-    dates: noData,
-    facts: "Maria Litvinenko: 11 отзывов к оплате за прошлую неделю. Кирилл Соколов, 5 звёзд, на модерации.",
-    received: "12",
-    payment: "5500",
     remainder: noData,
+    payment: "Вопрос, 5500",
+    paymentNote: "Мария Литвиненко: 11 отзывов к оплате за прошлую неделю.",
+    shots: [
+      {
+        date: noData,
+        account: "Кирилл Соколов",
+        received: "12",
+        note: "5 звёзд, на модерации.",
+      },
+    ],
   },
 ];
 
-export const reviewGap = "Остальные клиенты переписки: нет данных.";
+export const reviewGap = "Переписка Wazzup «Максим Отзывы», WhatsApp 79286096999. Других организаций в этих сообщениях нет.";
 
 export const adsNote = "Пока не подключено. Объявления появятся из Яндекс Бизнеса.";
 
@@ -185,7 +191,7 @@ export const sections = [
   {
     id: "otzyvy",
     title: "Отзывы",
-    line: "Робот покажет по клиенту, сколько отзывов заказано, накручено, осталось и что оплачено.",
+    line: "Таблица из переписки Wazzup «Максим Отзывы»: сколько заказано, что на скриншотах, остаток и оплата.",
     checks: [
       { code: "PM-10", title: "Ответы на отзывы за два года" },
       { code: "AM-W2-4", title: "Отзывы" },

@@ -131,6 +131,22 @@ function Trends() {
   );
 }
 
+function ShotList({ shots }) {
+  if (!Array.isArray(shots) || shots.length === 0) return noData;
+  return (
+    <ul className="shot-list">
+      {shots.map((shot) => (
+        <li key={`${shot.account}:${shot.received}:${shot.date}`}>
+          <p><span>Дата</span> {shot.date || noData}</p>
+          <p><span>Аккаунт</span> {shot.account || noData}</p>
+          <p><span>Получено</span> {shot.received || noData}</p>
+          {shot.note ? <p>{shot.note}</p> : null}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function ReviewsTable({ deals }) {
   return (
     <section className="card reviews-card" aria-label="Отзывы">
@@ -139,13 +155,11 @@ function ReviewsTable({ deals }) {
           <thead>
             <tr>
               <th>Организация</th>
-              <th>Ссылка на профиль</th>
+              <th>Ссылка</th>
               <th>Заказано</th>
-              <th>Даты</th>
-              <th>Скриншот</th>
-              <th>Получено</th>
-              <th>Оплата</th>
+              <th>Скриншоты</th>
               <th>Остаток</th>
+              <th>Оплата</th>
             </tr>
           </thead>
           <tbody>
@@ -154,11 +168,12 @@ function ReviewsTable({ deals }) {
                 <td>{client.organization}</td>
                 <td>{dealLink(knownLink(deals, client.organization))}</td>
                 <td>{client.purchased}</td>
-                <td>{client.dates}</td>
-                <td className="reviews-facts">{client.facts}</td>
-                <td>{client.received}</td>
-                <td>{client.payment}</td>
+                <td className="reviews-facts"><ShotList shots={client.shots} /></td>
                 <td>{client.remainder}</td>
+                <td className="reviews-pay">
+                  <p>{client.payment}</p>
+                  {client.paymentNote ? <p className="reviews-sub">{client.paymentNote}</p> : null}
+                </td>
               </tr>
             ))}
           </tbody>
