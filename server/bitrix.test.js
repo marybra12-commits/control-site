@@ -808,8 +808,14 @@ test("the deal list and the Maps page are read once per hour", async () => {
   resetControlChatState();
   let bitrix = 0;
   let maps = 0;
+  const writes = [];
+  const times = [];
   const fetchImpl = async (url) => {
     const address = String(url);
+    times.push(Date.now());
+    if (address.includes("im.message.add") || address.includes("crm.timeline.comment.add") || address.includes("im.chat.add")) {
+      writes.push(address);
+    }
     if (address.includes("yandex.ru/maps")) {
       maps += 1;
       return { ok: true, url: address, async text() { return "<title>Раковый двор</title>"; } };
@@ -835,5 +841,7 @@ test("the deal list and the Maps page are read once per hour", async () => {
   assert.equal(bitrix, after.bitrix);
   assert.equal(maps, after.maps);
   assert.equal(after.maps, 1);
+  assert.deepEqual(writes, []);
+  assert.equal(times.length >= 2 && times[1] - times[0] >= 200, true);
   resetControlChatState();
 });

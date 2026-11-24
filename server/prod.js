@@ -48,6 +48,15 @@ function filePath(pathname) {
 createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   if (url.pathname === "/api/oformlenie") {
+    if (req.method !== "GET") {
+      res.writeHead(405, {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        allow: "GET",
+      });
+      res.end(JSON.stringify({ connected: false, deals: [] }));
+      return;
+    }
     const response = await GET(req, { env: process.env }, publishedWebhook());
     res.writeHead(response.status, {
       "content-type": "application/json; charset=utf-8",

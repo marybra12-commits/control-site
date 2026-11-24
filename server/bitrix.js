@@ -183,6 +183,7 @@ function endpointFor(base, method) {
 }
 
 async function postResult(fetchImpl, endpoint, body) {
+  if (!(await paceOutbound())) return { ok: false, result: null, error: "" };
   try {
     const response = await fetchImpl(endpoint, {
       method: "POST",
@@ -1018,8 +1019,33 @@ function allowedMapsUrl(value) {
 }
 
 const HOUR_MS = 60 * 60 * 1000;
+const CALL_GAP_MS = 250;
+const CALL_CAP = 48;
 const mapsCache = new Map();
 let hourCacheOn = false;
+let notBefore = 0;
+let callsLeft = Infinity;
+let outboundCapped = false;
+
+function armOutboundLimit() {
+  notBefore = 0;
+  callsLeft = hourCacheOn ? CALL_CAP : Infinity;
+  outboundCapped = false;
+}
+
+async function paceOutbound() {
+  if (!hourCacheOn) return true;
+  if (callsLeft <= 0) {
+    outboundCapped = true;
+    return false;
+  }
+  callsLeft -= 1;
+  const now = Date.now();
+  const start = Math.max(now, notBefore);
+  notBefore = start + CALL_GAP_MS;
+  if (start > now) await new Promise((resolve) => setTimeout(resolve, start - now));
+  return true;
+}
 
 async function fetchMapsHtml(fetchImpl, link) {
   if (!allowedMapsUrl(link)) return null;
@@ -1027,6 +1053,7 @@ async function fetchMapsHtml(fetchImpl, link) {
     const hit = mapsCache.get(link);
     if (hit && Date.now() - hit.at < HOUR_MS) return hit.page;
   }
+  if (!(await paceOutbound())) return null;
   try {
     const response = await fetchImpl(link, {
       method: "GET",
@@ -1347,6 +1374,8 @@ export function resetControlChatState() {
   mapsCache.clear();
   dealCache.clear();
   hourCacheOn = false;
+  notBefore = 0;
+  callsLeft = Infinity;
   inflightLoad = null;
 }
 
@@ -1936,6 +1965,7 @@ async function loadOformlenieDealsNow(env = serviceEnv(), fetchImpl = fetch, now
 
   const base = env[WEBHOOK_ENV].trim();
   hourCacheOn = hourCacheAllowed(base);
+  armOutboundLimit();
   if (hourCacheOn) {
     const hit = dealCache.get(base);
     if (hit && Date.now() - hit.at < HOUR_MS) return hit.body;
@@ -2031,7 +2061,6 @@ async function loadOformlenieDealsNow(env = serviceEnv(), fetchImpl = fetch, now
     const people = usersById(users.result);
 
     const built = new Map();
-    const chatJobs = [];
     const rank = (title) => {
       if (offerForDeal(title)) return 0;
       if (isNamedDeal(title)) return 1;
@@ -2097,16 +2126,6 @@ async function loadOformlenieDealsNow(env = serviceEnv(), fetchImpl = fetch, now
         deal: { address, site, link: profileLink, assignee: people.get(assigneeId) || "", fileSeo: isRakovDeal(row?.TITLE) },
       }) : null;
       const review = named && maps ? reviewFindings(maps, { created: row?.DATE_CREATE, now }) : [];
-      if (named && report) {
-        chatJobs.push({
-          id: field(row?.ID),
-          title: organizationName(row?.TITLE),
-          created: row?.DATE_CREATE,
-          report,
-          review,
-          offer: Boolean(offerForDeal(row?.TITLE)),
-        });
-      }
       built.set(field(row?.ID), {
         id: field(row?.ID),
         title: organizationName(row?.TITLE),
@@ -2160,18 +2179,11 @@ async function loadOformlenieDealsNow(env = serviceEnv(), fetchImpl = fetch, now
       if (deal && !deals.some((existing) => existing.id === deal.id)) deals.push(deal);
     }
     deals.sort((left, right) => Number(isProofClient(right.title)) - Number(isProofClient(left.title)));
-    let chat = { posted: 0, missing: "" };
-    try {
-      chat = await deliverControlChat(fetchImpl, base, chatJobs, now);
-    } catch {
-      chat = { posted: 0, missing: "" };
-    }
     const body = {
       connected: true,
       deals,
-      ...(chat.missing ? { chat: { posted: chat.posted, missing: chat.missing } } : {}),
     };
-    if (hourCacheOn) dealCache.set(base, { at: Date.now(), body });
+    if (hourCacheOn && !outboundCapped) dealCache.set(base, { at: Date.now(), body });
     return body;
   } catch {
     return { connected: false, unavailable: true, deals: [] };
