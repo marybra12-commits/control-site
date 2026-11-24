@@ -1239,6 +1239,23 @@ test("the review chat keeps every named launch and drops a compliment", () => {
   assert.equal(sever.shots[0].received, "8");
 });
 
+test("a plain Bitrix refusal is shown without a URL", async () => {
+  const result = await loadReviewClients({ BITRIX_WEBHOOK_URL: "https://portal.example/rest/1/token/" }, async () => ({
+    ok: false,
+    async json() {
+      throw new Error("not json");
+    },
+    async text() {
+      return "ACCESS_DENIED see https://portal.example/rest/1/token/docs";
+    },
+  }));
+  assert.equal(result.connected, false);
+  assert.deepEqual(result.clients, []);
+  assert.equal(result.error.includes("ACCESS_DENIED"), true);
+  assert.equal(result.error.includes("http"), false);
+  assert.equal(result.error.includes("token"), false);
+});
+
 test("a failed review chat keeps the Bitrix error and no invented client", async () => {
   const calls = [];
   const result = await loadReviewClients({ BITRIX_WEBHOOK_URL: "https://portal.example/rest/1/token/" }, async (endpoint) => {
@@ -1265,12 +1282,10 @@ test("the review loader reads the Maxim chat and does not post", async () => {
   const result = await loadReviewClients({ BITRIX_WEBHOOK_URL: "https://portal.example/rest/1/token/" }, async (endpoint, options) => {
     const method = endpoint.split("/").pop();
     calls.push(method);
-    const body = JSON.parse(options.body);
+    assert.equal(options.headers["Content-Type"], "application/x-www-form-urlencoded");
+    const body = Object.fromEntries(new URLSearchParams(options.body));
     if (method === "im.search.chat.list.json" && body.FIND === "Максим Отзывы") {
       return { ok: true, async json() { return { result: [{ id: "chat77", title: "Максим Отзывы", entity_id: "wazzup|79286096999" }] }; } };
-    }
-    if (method === "im.chat.get.json") {
-      return { ok: true, async json() { return { result: { id: 77, title: "Максим Отзывы", entity_id: "wazzup|79286096999" } }; } };
     }
     if (method === "im.dialog.messages.get.json") {
       if (body.LAST_ID) return { ok: true, async json() { return { result: { messages: [] } }; } };

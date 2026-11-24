@@ -192,6 +192,56 @@ function endpointFor(base, method) {
   return `${base.endsWith("/") ? base : `${base}/`}${method}`;
 }
 
+function formBody(body) {
+  const params = new URLSearchParams();
+  const append = (key, value) => {
+    if (value == null || value === "") return;
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => append(`${key}[${index}]`, item));
+      return;
+    }
+    if (typeof value === "object") {
+      for (const [child, item] of Object.entries(value)) append(`${key}[${child}]`, item);
+      return;
+    }
+    params.append(key, String(value));
+  };
+  for (const [key, value] of Object.entries(body || {})) append(key, value);
+  return params;
+}
+
+async function readBitrixResponse(response) {
+  let payload = null;
+  if (response && typeof response.json === "function") {
+    try {
+      payload = await response.json();
+    } catch {
+      payload = null;
+    }
+  }
+  let raw = "";
+  if ((!payload || typeof payload !== "object") && response && typeof response.text === "function") {
+    try {
+      raw = await response.text();
+    } catch {
+      raw = "";
+    }
+    if (raw) {
+      try {
+        payload = JSON.parse(raw);
+      } catch {
+        payload = null;
+      }
+    }
+  }
+  const error = field(payload?.error);
+  const errorDescription = publicBitrixError(payload) || cleanBitrix(raw).slice(0, 240);
+  if (!response?.ok || !payload || typeof payload !== "object" || error) {
+    return { ok: false, result: null, error, errorDescription };
+  }
+  return { ok: true, result: payload.result ?? null, next: payload.next, error: "" };
+}
+
 async function postResult(fetchImpl, endpoint, body) {
   if (!(await paceOutbound())) return { ok: false, result: null, error: "" };
   try {
@@ -204,19 +254,25 @@ async function postResult(fetchImpl, endpoint, body) {
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(8000),
     });
-    let payload = null;
-    if (response && typeof response.json === "function") {
-      try {
-        payload = await response.json();
-      } catch {
-        payload = null;
-      }
-    }
-    const error = field(payload?.error);
-    if (!response?.ok || !payload || typeof payload !== "object" || error) {
-      return { ok: false, result: null, error, errorDescription: publicBitrixError(payload) };
-    }
-    return { ok: true, result: payload.result ?? null, next: payload.next, error: "" };
+    return await readBitrixResponse(response);
+  } catch {
+    return { ok: false, result: null };
+  }
+}
+
+async function postFields(fetchImpl, endpoint, body) {
+  if (!(await paceOutbound())) return { ok: false, result: null, error: "" };
+  try {
+    const response = await fetchImpl(endpoint, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: formBody(body).toString(),
+      signal: AbortSignal.timeout(8000),
+    });
+    return await readBitrixResponse(response);
   } catch {
     return { ok: false, result: null };
   }
@@ -2999,49 +3055,56 @@ function reviewChatScore(row) {
   return score;
 }
 
-async function findReviewChat(fetchImpl, base) {
-  const errors = [];
-  const rows = [];
-  const searches = [
-    ["im.search.chat.list.json", { FIND: "Максим Отзывы", LIMIT: 30 }],
-    ["im.search.chat.list.json", { FIND: REVIEW_PHONE, LIMIT: 20 }],
-    ["im.recent.get.json", { SKIP_OPENLINES: "N", LIMIT: 50 }],
-  ];
-  for (const [method, body] of searches) {
-    const listed = await postResult(fetchImpl, endpointFor(base, method), body);
-    if (!listed.ok && !listed.result) errors.push(cleanBitrix(listed.errorDescription || listed.error) || "Bitrix не ответил");
-    rows.push(...recentDialogs(listed.result));
-  }
-  const duplicates = await postResult(fetchImpl, endpointFor(base, "crm.duplicate.findbycomm.json"), {
-    type: "PHONE",
-    values: [REVIEW_PHONE, `+${REVIEW_PHONE}`],
-  });
-  if (!duplicates.ok && !duplicates.result) errors.push(cleanBitrix(duplicates.errorDescription || duplicates.error) || "Bitrix не ответил");
-  const found = duplicates.result && typeof duplicates.result === "object" ? duplicates.result : {};
-  for (const [kind, ids] of Object.entries(found)) {
-    const entity = kind.toLowerCase().replace(/s$/, "");
-    for (const id of Array.isArray(ids) ? ids : []) {
-      const line = await postResult(fetchImpl, endpointFor(base, "imopenlines.crm.chat.get.json"), {
-        CRM_ENTITY_TYPE: entity,
-        CRM_ENTITY: field(id),
-      });
-      if (line.result) rows.push(line.result);
-    }
-  }
+function bestReviewChat(rows) {
   let best = null;
   const seen = new Set();
   for (const row of rows) {
     const id = recentChatId(row) || chatIdFrom(row);
     if (!id || seen.has(id)) continue;
-    if (reviewChatScore(row) < 8) continue;
-    seen.add(id);
-    const info = await postResult(fetchImpl, endpointFor(base, "im.chat.get.json"), { CHAT_ID: id });
-    const detail = info.ok && info.result && typeof info.result === "object" ? { ...row, ...info.result } : row;
-    const score = reviewChatScore(detail);
+    const score = reviewChatScore(row);
     if (score < 8) continue;
-    if (!best || score > best.score) best = { id, score, sessionId: sessionIdFrom(detail) };
+    seen.add(id);
+    if (!best || score > best.score) best = { id, score, sessionId: sessionIdFrom(row) };
   }
-  if (best) return { id: best.id, sessionId: best.sessionId, error: "" };
+  return best;
+}
+
+function notedBitrixError(result) {
+  return cleanBitrix(result?.errorDescription || result?.error) || "Bitrix не ответил";
+}
+
+async function findReviewChat(fetchImpl, base) {
+  const errors = [];
+  const rows = [];
+  const searches = [
+    { FIND: "Максим Отзывы" },
+    { FIND: REVIEW_PHONE },
+  ];
+  for (const body of searches) {
+    const listed = await postFields(fetchImpl, endpointFor(base, "im.search.chat.list.json"), body);
+    if (!listed.ok && !listed.result) errors.push(notedBitrixError(listed));
+    rows.push(...recentDialogs(listed.result));
+    const found = bestReviewChat(rows);
+    if (found) return { ...found, error: "" };
+  }
+  const duplicates = await postFields(fetchImpl, endpointFor(base, "crm.duplicate.findbycomm.json"), {
+    type: "PHONE",
+    values: [REVIEW_PHONE, `+${REVIEW_PHONE}`],
+  });
+  if (!duplicates.ok && !duplicates.result) errors.push(notedBitrixError(duplicates));
+  const found = duplicates.result && typeof duplicates.result === "object" && !Array.isArray(duplicates.result) ? duplicates.result : {};
+  for (const [kind, ids] of Object.entries(found)) {
+    const entity = kind.toLowerCase().replace(/s$/, "");
+    for (const id of Array.isArray(ids) ? ids : []) {
+      const line = await postFields(fetchImpl, endpointFor(base, "imopenlines.crm.chat.get.json"), {
+        CRM_ENTITY_TYPE: entity,
+        CRM_ENTITY: field(id),
+      });
+      if (line.result) rows.push(...recentDialogs(line.result));
+    }
+  }
+  const best = bestReviewChat(rows);
+  if (best) return { ...best, error: "" };
   const listed = errors.find(Boolean);
   if (!rows.length && listed) return { id: "", sessionId: "", error: listed };
   return { id: "", sessionId: "", error: listed || "В списке диалогов нет чата «Максим Отзывы»." };
@@ -3054,7 +3117,7 @@ async function readReviewMessages(fetchImpl, base, chat) {
   for (let page = 0; page < 24; page += 1) {
     const body = { DIALOG_ID: dialogId, LIMIT: 50 };
     if (lastId) body.LAST_ID = lastId;
-    const history = await postResult(fetchImpl, endpointFor(base, "im.dialog.messages.get.json"), body);
+    const history = await postFields(fetchImpl, endpointFor(base, "im.dialog.messages.get.json"), body);
     if (!history.ok && !history.result) {
       const error = cleanBitrix(history.errorDescription || history.error) || "Bitrix не ответил";
       if (!messages.length && chat.sessionId) break;
@@ -3069,7 +3132,7 @@ async function readReviewMessages(fetchImpl, base, chat) {
     lastId = oldest;
   }
   if (!messages.length && chat.sessionId) {
-    const history = await postResult(fetchImpl, endpointFor(base, "imopenlines.session.history.get.json"), { SESSION_ID: chat.sessionId });
+    const history = await postFields(fetchImpl, endpointFor(base, "imopenlines.session.history.get.json"), { SESSION_ID: chat.sessionId });
     if (!history.ok && !history.result) {
       return { messages: [], error: cleanBitrix(history.errorDescription || history.error) || "Bitrix не ответил", truncated: false };
     }
