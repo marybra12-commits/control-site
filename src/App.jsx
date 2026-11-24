@@ -181,6 +181,64 @@ function Mark({ closed }) {
   );
 }
 
+function CheckList({ items, openProof, setOpenProof }) {
+  return (
+    <ul className="status-checks">
+      {items.map((item) => {
+        const key = `${item.title}:${item.doneOn || ""}`;
+        const opened = openProof === key;
+        const proven = item.status === "Сделано" && item.proof;
+        return (
+          <li key={key}>
+            <Mark closed={item.status === "Сделано"} />
+            <span className="check-title">{item.title}</span>
+            {proven ? (
+              <button
+                type="button"
+                className="done-button"
+                aria-expanded={opened}
+                onClick={() => setOpenProof(opened ? "" : key)}
+              >
+                {doneLabel(item)}
+              </button>
+            ) : null}
+            {item.status === "Не сделано" ? <span className="miss-button">Не сделано</span> : null}
+            {!proven && item.status !== "Не сделано" ? <span className="pill">{noData}</span> : null}
+            {item.doneOn ? <p className="check-note">{item.doneOn}</p> : null}
+            {item.firstNews ? <p className="check-note">Первая новость: «{item.firstNews}»</p> : null}
+            {opened ? <p className="proof-line">{item.proof}</p> : null}
+            {item.status === "Не сделано" && item.missing ? <p className="check-note">{item.missing}</p> : null}
+            {item.overdue && item.due ? <p className="check-note">Просрочено, срок был {item.due}.</p> : null}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function WeekPlan({ plan, openProof, setOpenProof }) {
+  const weeks = Array.isArray(plan?.weeks) ? plan.weeks : [];
+  const rest = Array.isArray(plan?.rest) ? plan.rest : [];
+  return (
+    <section className="panel week-plan" aria-label="План месяца">
+      <h3>План месяца</h3>
+      <p className="week-anchor">{plan?.anchorNote || noData}</p>
+      {weeks.map((week) => (
+        <section key={week.week} className="week-block" aria-label={week.title}>
+          <h4>{week.title}{week.due ? ` · срок ${week.due}` : ""}</h4>
+          <CheckList items={week.steps || []} openProof={openProof} setOpenProof={setOpenProof} />
+        </section>
+      ))}
+      {rest.length > 0 ? (
+        <section className="week-block" aria-label="Без недели в регламенте">
+          <h4>Без недели в регламенте</h4>
+          <CheckList items={rest} openProof={openProof} setOpenProof={setOpenProof} />
+        </section>
+      ) : null}
+    </section>
+  );
+}
+
 function stageProblem(deal) {
   const fit = deal.stageFit;
   if (!fit || fit.state === "right") return "";
@@ -319,38 +377,14 @@ function DealDetail({ section, deal, onBack }) {
           {talk.length > 0 ? (
             <p className="talk-line">{talk.map(([label, value]) => `${label}: ${value}`).join(". ")}.</p>
           ) : null}
-          <section className="panel" aria-label="Чек-лист">
-            <h3>Чек-лист</h3>
-            <ul className="status-checks">
-              {report.map((item) => {
-                const key = `report:${item.title}`;
-                const opened = openProof === key;
-                const proven = item.status === "Сделано" && item.proof;
-                return (
-                  <li key={item.title}>
-                    <Mark closed={item.status === "Сделано"} />
-                    <span className="check-title">{item.title}</span>
-                    {proven ? (
-                      <button
-                        type="button"
-                        className="done-button"
-                        aria-expanded={opened}
-                        onClick={() => setOpenProof(opened ? "" : key)}
-                      >
-                        {doneLabel(item)}
-                      </button>
-                    ) : null}
-                    {item.status === "Не сделано" ? <span className="miss-button">Не сделано</span> : null}
-                    {!proven && item.status !== "Не сделано" ? <span className="pill">{noData}</span> : null}
-                    {item.firstNews ? <p className="check-note">Первая новость: «{item.firstNews}»</p> : null}
-                    {opened ? <p className="proof-line">{item.proof}</p> : null}
-                    {item.status === "Не сделано" && item.missing ? <p className="check-note">{item.missing}</p> : null}
-                    {item.overdue && item.due ? <p className="check-note">Просрочено, срок был {item.due}.</p> : null}
-                  </li>
-                );
-              })}
-            </ul>
-          </section>
+          {deal.plan?.weeks?.length ? (
+            <WeekPlan plan={deal.plan} openProof={openProof} setOpenProof={setOpenProof} />
+          ) : (
+            <section className="panel" aria-label="Чек-лист">
+              <h3>Чек-лист</h3>
+              <CheckList items={report} openProof={openProof} setOpenProof={setOpenProof} />
+            </section>
+          )}
         </>
       ) : null}
       {stageNote && report ? <p className="stage-line">{stageNote}</p> : null}

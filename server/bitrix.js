@@ -976,6 +976,11 @@ export function parseMapsProfile(html) {
   const firstNews = earliestNews
     ? { title: earliestNews.title, doneOn: moscowDoneOn(earliestNews.stamp) }
     : null;
+  const newsItems = timedNews.map((item) => ({
+    title: item.title,
+    doneOn: moscowDoneOn(item.stamp),
+    day: moscowParts(new Date(item.stamp)).key,
+  }));
   const eventCount = Number(card?.eventsPreviews?.count);
   const goodsTabPresent = /aria-label="(?:Товары|Меню)/i.test(source);
   const newsTabPresent = /aria-label="Новости/i.test(source);
@@ -1025,6 +1030,7 @@ export function parseMapsProfile(html) {
     posts,
     newsTitles,
     firstNews,
+    newsItems,
     newsDate: newsDays.length === 1 ? newsDays[0] : newsDays.join(", "),
     newsPresent: newsTabPresent || newsTitles.length > 0 || (typeof posts === "number" && posts > 0),
     sites: links,
@@ -1358,6 +1364,78 @@ export function controlBrief({ maps, now, heard, replies, deal = {} }) {
       ...(first.title ? { firstNews: first.title } : {}),
     };
   });
+}
+
+const PLAN_WEEKS = [
+  { week: 1, title: "Неделя 1", edge: 6, steps: ["Геолокация и вход", "Шапка профиля", "Внешние ссылки"] },
+  { week: 2, title: "Неделя 2", edge: 13, steps: ["Фото по разделам", "Товары в витрине", "Ответы на отзывы", "Первая новость"] },
+  { week: 3, title: "Неделя 3", edge: 20, steps: ["Оформление", "Вторая новость", "Лента сторис"] },
+  { week: 4, title: "Неделя 4", edge: 29, steps: ["Публикация", "Правки после проверки"] },
+];
+const PLAN_REST = ["QR-код", "SEO фото"];
+
+function planStep(title, row) {
+  if (!row) return { title, status: NO_DATA };
+  const step = { title, status: row.status || NO_DATA };
+  if (row.proof) step.proof = row.proof;
+  if (row.doneOn) step.doneOn = row.doneOn;
+  if (row.firstNews) step.firstNews = row.firstNews;
+  if (row.status === NOT_DONE && row.missing) step.missing = row.missing;
+  if (row.status === NOT_DONE && row.say) step.say = row.say;
+  if (row.overdue) {
+    step.overdue = true;
+    if (row.due) step.due = row.due;
+  }
+  return step;
+}
+
+function publicationStep(title, index, items, newsRow) {
+  const item = items[index];
+  if (item && (item.title || item.doneOn)) {
+    const proof = [item.title ? `«${item.title}»` : "", item.doneOn || ""].filter(Boolean).join(", ");
+    return {
+      title,
+      status: DONE,
+      ...(item.doneOn ? { doneOn: item.doneOn } : {}),
+      ...(proof ? { proof } : {}),
+      ...(index === 0 && item.title ? { firstNews: item.title } : {}),
+    };
+  }
+  if (index === 0 && newsRow) return planStep(title, newsRow);
+  return { title, status: NO_DATA };
+}
+
+export function monthPlan({ rows, anchor, anchorKind, news } = {}) {
+  const byTitle = new Map((Array.isArray(rows) ? rows : []).map((row) => [row.title, row]));
+  const start = dayZeroKey(anchor);
+  const raw = formatDay(anchor);
+  const dayZero = start ? formatDay(start) : "";
+  let anchorNote = "Даты получения информации нет.";
+  if (anchorKind === "received" && (raw || dayZero)) {
+    anchorNote = raw && dayZero && raw !== dayZero
+      ? `Информация получена ${raw}. День 0 — ${dayZero}.`
+      : `Информация получена ${dayZero || raw}. Недели считаются от этой даты.`;
+  } else if (dayZero) {
+    anchorNote = `В переписке нет даты получения информации. Недели считаются от появления задачи в Битриксе, ${dayZero}.`;
+  }
+  const items = (Array.isArray(news) ? news : []).filter((item) => item && (item.title || item.doneOn));
+  const newsRow = byTitle.get("Новости");
+  return {
+    anchorNote,
+    weeks: PLAN_WEEKS.map((week) => ({
+      week: week.week,
+      title: week.title,
+      ...(start ? { due: formatDay(addDays(start, week.edge)) } : {}),
+      steps: week.steps.map((title) => {
+        if (title === "Первая новость") return publicationStep(title, 0, items, newsRow);
+        if (title === "Вторая новость") return publicationStep(title, 1, items, null);
+        if (title === "Публикация") return publicationStep(title, 2, items, null);
+        if (title === "Правки после проверки") return { title, status: NO_DATA };
+        return planStep(title, byTitle.get(title));
+      }),
+    })),
+    rest: PLAN_REST.map((title) => planStep(title, byTitle.get(title))),
+  };
 }
 
 function finishDay(created) {
@@ -2580,6 +2658,12 @@ async function loadOformlenieDealsNow(env = serviceEnv(), fetchImpl = fetch, now
         },
       }) : null;
       const review = showCard && maps ? reviewFindings(maps, { created: row?.DATE_CREATE, now }) : [];
+      const plan = showCard && report ? monthPlan({
+        rows: report,
+        anchor: received || row?.DATE_CREATE,
+        anchorKind: received ? "received" : (row?.DATE_CREATE ? "task" : ""),
+        news: maps?.newsItems || [],
+      }) : null;
       built.set(field(row?.ID), {
         id: field(row?.ID),
         title: organizationName(row?.TITLE),
@@ -2595,6 +2679,7 @@ async function loadOformlenieDealsNow(env = serviceEnv(), fetchImpl = fetch, now
         ...(proof ? { pilot: true, late, stageFit, checklist, dialog: talk } : {}),
         ...(offerForDeal(row?.TITLE) ? { offer: "/kp-rakovy-dvor.html" } : {}),
         ...(report ? { report } : {}),
+        ...(plan ? { plan } : {}),
         ...(review.length ? { review } : {}),
         marks,
         checks: (proof ? PILOT_CHECKS : STARTER_CHECKS).map((check) => {

@@ -704,6 +704,21 @@ dd {
   font-weight: 500;
 }
 
+.week-anchor {
+  margin: 0;
+  font-size: 14px;
+}
+
+.week-block {
+  margin-top: 16px;
+}
+
+.week-block h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
 .status-checks {
   margin: 0;
   padding: 0;

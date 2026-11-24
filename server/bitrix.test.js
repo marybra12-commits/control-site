@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { doneLabel, overdueItems } from "../src/content.js";
-import { acceptanceStatus, clearSentMemory, controlBrief, controlMessages, deliverControlChat, loadOformlenieDeals, organizationName, parseMapsProfile, pipelineSection, postReadyCards, readDialog, readyReviewLine, resetControlChatState, reviewFindings, webhookConfigured } from "./bitrix.js";
+import { acceptanceStatus, clearSentMemory, controlBrief, controlMessages, deliverControlChat, loadOformlenieDeals, monthPlan, organizationName, parseMapsProfile, pipelineSection, postReadyCards, readDialog, readyReviewLine, resetControlChatState, reviewFindings, webhookConfigured } from "./bitrix.js";
 import { resetSendFlight, sendControlOnce } from "./send-once.js";
 
 test("missing or blank webhook stays disconnected and does not call Bitrix", async () => {
@@ -384,6 +384,8 @@ test("each funnel keeps its active deals and drops a won card", async () => {
   for (const deal of result.deals.filter((item) => item.funnel === "oformlenie")) {
     assert.equal(Array.isArray(deal.report), true, deal.title);
     assert.equal(deal.report.length, 11, deal.title);
+    assert.equal(deal.plan.weeks.length, 4, deal.title);
+    assert.equal(deal.plan.weeks.map((week) => week.title).join("|"), "Неделя 1|Неделя 2|Неделя 3|Неделя 4");
   }
   assert.equal(result.deals.find((deal) => deal.title === "Кафе Волна").funnel, "podderzhka");
   assert.equal(result.deals.find((deal) => deal.title === "Кафе Волна").link, "Нет данных");
@@ -502,6 +504,51 @@ test("a goods tab and a news tab are not missing", () => {
   });
   assert.equal(withChat.find((item) => item.title === "QR-код").status, "Сделано");
   assert.equal(withChat.find((item) => item.title === "QR-код").proof.includes("Wazzup"), true);
+});
+
+test("the month plan names the step due in each of the four weeks", () => {
+  const rows = controlBrief({
+    maps: {
+      opened: true,
+      name: true,
+      profileName: "Кафе",
+      photos: 4,
+      photoAlts: ["фасад"],
+      goods: 3,
+      goodsNames: ["Раки гиганты"],
+      posts: 3,
+      firstNews: { title: "Что выбрать к пенному?", doneOn: "5 ноября 2026" },
+    },
+    now: new Date("2026-11-24T12:00:00+03:00"),
+    deal: { received: "2026-10-09T12:00:00+03:00" },
+  });
+  const plan = monthPlan({
+    rows,
+    anchor: "2026-10-09T12:00:00+03:00",
+    anchorKind: "received",
+    news: [
+      { title: "Что выбрать к пенному?", doneOn: "5 ноября 2026", day: "2026-11-05" },
+      { title: "Морепродукты", doneOn: "5 ноября 2026", day: "2026-11-05" },
+      { title: "Раки — гастрономическая традиция, которая объединяет", doneOn: "5 ноября 2026", day: "2026-11-05" },
+    ],
+  });
+  assert.equal(plan.weeks.length, 4);
+  assert.equal(plan.weeks[0].due, "15.10.2026");
+  assert.equal(plan.weeks[1].due, "22.10.2026");
+  assert.equal(plan.weeks[2].due, "29.10.2026");
+  assert.equal(plan.weeks[3].due, "07.11.2026");
+  assert.equal(plan.anchorNote.includes("Информация получена 09.10.2026"), true);
+  assert.equal(plan.weeks[0].steps.some((step) => step.title === "Шапка профиля"), true);
+  assert.equal(plan.weeks[1].steps.some((step) => step.title === "Товары в витрине" && step.status === "Сделано"), true);
+  const first = plan.weeks[1].steps.find((step) => step.title === "Первая новость");
+  assert.equal(first.status, "Сделано");
+  assert.equal(first.doneOn, "5 ноября 2026");
+  assert.equal(plan.weeks[2].steps.find((step) => step.title === "Вторая новость").doneOn, "5 ноября 2026");
+  assert.equal(plan.weeks[3].steps.find((step) => step.title === "Публикация").doneOn, "5 ноября 2026");
+  assert.equal(plan.weeks[3].steps.find((step) => step.title === "Правки после проверки").status, "Нет данных");
+  const blank = monthPlan({ rows, anchor: "", anchorKind: "", news: [] });
+  assert.equal(blank.weeks.every((week) => !week.due), true);
+  assert.equal(blank.anchorNote, "Даты получения информации нет.");
 });
 
 test("a missing step is overdue only a month after the information arrived", () => {
