@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { adsNote, disconnectedLine, emptyState, noData, reviewClients, reviewGap, sections, trends } from "./content.js";
+import { adsNote, disconnectedLine, emptyState, events, noData, reviewClients, reviewGap, sections, trends } from "./content.js";
 
 function sectionFromHash() {
   const id = window.location.hash.replace(/^#/, "").split("/")[0];
@@ -48,7 +48,7 @@ function keepStage(key, stage) {
 }
 
 function dealsForSection(section, deals) {
-  if (section.id === "reklama" || section.id === "otzyvy" || section.id === "tendentsii") return [];
+  if (section.id === "reklama" || section.id === "otzyvy" || section.id === "tendentsii" || section.id === "meropriyatiya") return [];
   if (section.funnel) return deals.filter((deal) => deal.funnel === section.funnel);
   return deals;
 }
@@ -95,6 +95,23 @@ function checklist(section, deal) {
       image: done ? image : "",
     };
   });
+}
+
+function Events() {
+  return (
+    <ul className="trends">
+      {events.map((event) => (
+        <li key={event.href} className="card trend">
+          <p className="trend-date">{event.city} · {event.date}</p>
+          <h2 className="trend-title">{event.title}</h2>
+          <p className="trend-summary">{event.summary}</p>
+          <a className="trend-source" href={event.href} target="_blank" rel="noreferrer">
+            {event.source}
+          </a>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 function Trends() {
@@ -656,6 +673,8 @@ export default function App() {
 
           {section.id === "tendentsii" ? (
             <Trends />
+          ) : section.id === "meropriyatiya" ? (
+            <Events />
           ) : section.id === "reklama" ? (
             <section className="card empty-card">
               <p>{adsNote}</p>
