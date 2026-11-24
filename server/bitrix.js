@@ -1128,6 +1128,7 @@ function factFor(profile, key) {
     return { state: "unknown", missing: "", proof: "" };
   }
   if (key === "seo") {
+    if (profile.fileSeo) return { state: "yes", missing: "Нет", proof: "Ключевые слова записаны в файлы фото в Lightroom, не в видимую подпись на Картах." };
     const template = profile.photoAlts.length > 0 && profile.photoAlts.every(templateCaption);
     if (profile.alts > 0 && !template) return { state: "yes", missing: "Нет", proof: "У фото на Картах есть свои подписи." };
     if (template) return { state: "no", missing: "Подписи фото на Картах шаблонные, это не SEO.", proof: "" };
@@ -1168,7 +1169,7 @@ export function controlBrief({ maps, created, now, heard, replies, deal = {} }) 
   const slow = typeof replies === "string" && (replies.includes("реже") || replies.includes("пауза"));
   const opened = Boolean(maps?.opened || maps?.readable);
   const rows = CONTROL_POINTS.map((point) => {
-    const fact = factFor(opened ? maps : null, point.key);
+    const fact = factFor(opened ? { ...maps, fileSeo: Boolean(deal.fileSeo) } : null, point.key);
     const fromDeal = dealFact(point.key, deal);
     const fromChat = chatFact(point.key, heard);
     const dueKey = start && typeof point.due === "number" ? addDays(start, point.due) : "";
@@ -1176,6 +1177,7 @@ export function controlBrief({ maps, created, now, heard, replies, deal = {} }) 
     const late = Boolean(dueKey && now > atMoscowHour(dueKey, 18));
     const pause = slow ? " Клиент отвечает с паузами." : "";
     if (fact.state === "yes" && fact.proof) {
+      const inFiles = point.key === "seo" && deal.fileSeo;
       return {
         title: point.title,
         stuck: "Нет",
@@ -1183,8 +1185,8 @@ export function controlBrief({ maps, created, now, heard, replies, deal = {} }) 
         status: DONE,
         state: "closed",
         proof: fact.proof,
-        say: "Ничего не говорить: на Картах это есть.",
-        why: "На Картах это видно.",
+        say: inFiles ? "Ничего не говорить: ключевые слова в файлах фото." : "Ничего не говорить: на Картах это есть.",
+        why: inFiles ? "Ключевые слова записаны в Lightroom, не в подпись на Картах." : "На Картах это видно.",
       };
     }
     if (fromChat) {
@@ -1282,9 +1284,9 @@ export function reviewFindings(profile, context = {}) {
   if (alts.length > 0 && alts.every(templateCaption)) {
     const count = profile.photos || alts.length;
     findings.push({
-      place: `Фото, ${count} кадров`,
+      place: `Видимая подпись, ${count} кадров`,
       wrong: alts[0],
-      change: "Подпись этого кадра: что на нём снято, своими словами.",
+      change: "Напишите, что снято на этом кадре.",
       regulation: false,
       deadline: finish,
     });
@@ -1304,6 +1306,7 @@ export function controlMessages(job, now = new Date()) {
     if (item?.status !== NOT_DONE) continue;
     const fix = field(item.missing || item.say);
     if (!fix || fix === NO_DATA) continue;
+    if (item.title === "SEO фото" && isRakovDeal(title) && /не SEO/.test(fix)) continue;
     const deadline = field(item.due) || finish || "в чек-листе даты нет";
     lines.push(`${title}. Шаг: ${item.title}. Срок: ${deadline}. Исправьте: ${fix}`);
   }
@@ -1320,10 +1323,12 @@ export function controlMessages(job, now = new Date()) {
 }
 
 const postedChatLines = new Set();
+const postedComments = new Set();
 let controlChatId = "";
 
 export function resetControlChatState() {
   postedChatLines.clear();
+  postedComments.clear();
   controlChatId = "";
 }
 
@@ -1364,41 +1369,74 @@ async function ensureControlChat(fetchImpl, base, mariaId) {
   return { id: "", missing: created.error ? "im.chat.add" : "" };
 }
 
+function commentText(row) {
+  return messageText({ text: field(row?.COMMENT ?? row?.comment ?? row?.TEXT) });
+}
+
+async function postDealComment(fetchImpl, base, dealId, line) {
+  const key = `${dealId}|${line}`;
+  if (postedComments.has(key)) return "";
+  const sent = await postResult(fetchImpl, endpointFor(base, "crm.timeline.comment.add.json"), {
+    fields: {
+      ENTITY_ID: Number(dealId) || dealId,
+      ENTITY_TYPE: "deal",
+      COMMENT: line,
+    },
+  });
+  if (!sent.ok) return sent.error ? "crm.timeline.comment.add" : "";
+  postedComments.add(key);
+  return "";
+}
+
 export async function deliverControlChat(fetchImpl, base, jobs, now = new Date()) {
   const ordered = [...(Array.isArray(jobs) ? jobs : [])].sort((left, right) => Number(Boolean(right?.offer)) - Number(Boolean(left?.offer)));
   const pending = [];
   for (const job of ordered) {
     for (const line of controlMessages(job, now)) {
       const key = `${field(job?.id)}|${line}`;
-      if (postedChatLines.has(key)) continue;
-      pending.push({ key, line });
+      pending.push({ key, id: field(job?.id), line });
     }
   }
   if (!pending.length) return { posted: 0, missing: "" };
+  const failures = [];
+  const note = (method) => {
+    if (method && !failures.includes(method)) failures.push(method);
+  };
   const maria = await findMaria(fetchImpl, base);
-  if (!maria.id) return { posted: 0, missing: maria.missing || "" };
-  const chat = await ensureControlChat(fetchImpl, base, maria.id);
-  if (!chat.id) return { posted: 0, missing: chat.missing || "im.chat.add" };
-  const history = await postResult(fetchImpl, endpointFor(base, "im.dialog.messages.get.json"), {
-    DIALOG_ID: `chat${chat.id}`,
-    LIMIT: 100,
-  });
-  const seen = new Set(messageList(history.result).map((row) => messageText(row)));
+  note(maria.missing);
+  const chat = maria.id ? await ensureControlChat(fetchImpl, base, maria.id) : { id: "", missing: "" };
+  note(chat.missing);
+  const seen = new Set();
+  if (chat.id) {
+    const history = await postResult(fetchImpl, endpointFor(base, "im.dialog.messages.get.json"), {
+      DIALOG_ID: `chat${chat.id}`,
+      LIMIT: 100,
+    });
+    for (const row of messageList(history.result)) seen.add(messageText(row));
+  }
   let posted = 0;
   for (const item of pending) {
-    if (seen.has(messageText({ text: item.line }))) {
-      postedChatLines.add(item.key);
-      continue;
+    if (!postedChatLines.has(item.key)) {
+      if (!chat.id) {
+        // The chat method is already recorded. The deal comment still goes out.
+      } else if (seen.has(messageText({ text: item.line }))) {
+        postedChatLines.add(item.key);
+      } else {
+        const sent = await postResult(fetchImpl, endpointFor(base, "im.message.add.json"), {
+          DIALOG_ID: `chat${chat.id}`,
+          MESSAGE: item.line,
+        });
+        if (!sent.ok) note(sent.error ? "im.message.add" : "");
+        else {
+          postedChatLines.add(item.key);
+          seen.add(messageText({ text: item.line }));
+          posted += 1;
+        }
+      }
     }
-    const sent = await postResult(fetchImpl, endpointFor(base, "im.message.add.json"), {
-      DIALOG_ID: `chat${chat.id}`,
-      MESSAGE: item.line,
-    });
-    if (!sent.ok) return { posted, missing: sent.error ? "im.message.add" : "" };
-    postedChatLines.add(item.key);
-    posted += 1;
+    if (item.id) note(await postDealComment(fetchImpl, base, item.id, item.line));
   }
-  return { posted, missing: "" };
+  return { posted, missing: failures.join(", ") };
 }
 
 export function managerRows(items, created, now) {
@@ -1985,7 +2023,7 @@ export async function loadOformlenieDeals(env = serviceEnv(), fetchImpl = fetch,
         now,
         heard,
         replies: talk?.replies,
-        deal: { address, site, link: profileLink, assignee: people.get(assigneeId) || "" },
+        deal: { address, site, link: profileLink, assignee: people.get(assigneeId) || "", fileSeo: isRakovDeal(row?.TITLE) },
       }) : null;
       const review = named && maps ? reviewFindings(maps, { created: row?.DATE_CREATE, now }) : [];
       if (named && report) {

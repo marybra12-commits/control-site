@@ -617,7 +617,7 @@ test("the live storefront and news stay done and the review names the remaining 
     created: "2026-10-09T10:00:00+03:00",
     now: new Date("2026-11-23T12:00:00+03:00"),
     heard: {},
-    deal: { assignee: "Лиана", link: "https://yandex.ru/maps/-/CXSSVWPY" },
+    deal: { assignee: "Лиана", link: "https://yandex.ru/maps/-/CXSSVWPY", fileSeo: true },
   });
   const goods = rows.find((item) => item.title === "Товары в витрине");
   const news = rows.find((item) => item.title === "Новости");
@@ -637,7 +637,10 @@ test("the live storefront and news stay done and the review names the remaining 
   const review = reviewFindings(profile, { created: "2026-10-09T10:00:00+03:00", now: new Date("2026-11-23T12:00:00+03:00") });
   assert.equal(JSON.stringify(review).includes("Нет данных"), false);
   assert.equal(review.some((item) => item.place.includes("Раки гиганты") && item.wrong === "1 ₽" && item.change.includes("прайса")), true);
-  assert.equal(review.some((item) => item.place.includes("23") && item.wrong.includes("фото") && item.change.includes("что на нём снято")), true);
+  assert.equal(review.some((item) => item.place.startsWith("Видимая подпись") && item.wrong.includes("фото") && item.change.includes("что снято")), true);
+  assert.equal(rows.find((item) => item.title === "SEO фото").status, "Сделано");
+  assert.equal(rows.find((item) => item.title === "SEO фото").proof.includes("Lightroom"), true);
+  assert.equal(JSON.stringify(rows).includes("не SEO"), false);
   assert.equal(JSON.stringify(review).includes("Rakoviy"), false);
   assert.equal(JSON.stringify(review).includes("свой сайт"), false);
   assert.equal(JSON.stringify(review).includes("Благодарим"), false);
@@ -649,7 +652,7 @@ test("the live storefront and news stay done and the review names the remaining 
   }, new Date("2026-11-23T12:00:00+03:00"));
   assert.equal(lines[0].startsWith("Автосделка Раковой Двор Оформление+3Д. Шаг:"), true);
   assert.equal(lines.some((line) => /нет товаров|нет новостей/.test(line)), false);
-  assert.equal(lines.some((line) => line.includes("Шаг: SEO фото") && line.includes("Исправьте:")), true);
+  assert.equal(lines.some((line) => /SEO фото|не SEO/.test(line)), false);
   assert.equal(lines.some((line) => line.includes("Раки гиганты") && line.includes("Срок:")), true);
   assert.equal(lines.some((line) => /Rakoviy|свой сайт|Благодарим/.test(line)), false);
 });
@@ -664,7 +667,7 @@ test("a control chat is only with Maria and names the missing method", async () 
       if (method === "user.get.json") {
         return { ok: true, async json() { return { result: [{ ID: "3", NAME: "Мария", LAST_NAME: "Брага" }, { ID: "4", NAME: "Анна", LAST_NAME: "Смирнова" }] }; } };
       }
-      if (method === "im.chat.add.json") {
+      if (method === "im.chat.add.json" || method === "crm.timeline.comment.add.json") {
         return { ok: true, async json() { return { error: "ERROR_METHOD_NOT_FOUND" }; } };
       }
       return { ok: true, async json() { return { result: 1 }; } };
@@ -675,12 +678,12 @@ test("a control chat is only with Maria and names the missing method", async () 
       title: "Автосделка Раковой Двор Оформление+3Д",
       offer: true,
       created: "2026-10-09T10:00:00+03:00",
-      report: [{ title: "SEO фото", status: "Не сделано", missing: "Подписи фото на Картах шаблонные, это не SEO.", due: "" }],
+      report: [{ title: "Витрина", status: "Не сделано", missing: "Цена стоит 1 ₽, описания нет.", due: "07.11.2026" }],
       review: [],
     }],
     new Date("2026-11-23T12:00:00+03:00"),
   );
-  assert.equal(missing.missing, "im.chat.add");
+  assert.equal(missing.missing, "im.chat.add, crm.timeline.comment.add");
   assert.equal(missing.posted, 0);
   assert.equal(JSON.stringify(missing).includes("placeholder"), false);
   assert.equal(calls.some((call) => call.url.endsWith("/im.message.add.json")), false);
@@ -689,6 +692,7 @@ test("a control chat is only with Maria and names the missing method", async () 
 
   resetControlChatState();
   const sent = [];
+  const comments = [];
   const posted = await deliverControlChat(
     async (url, options) => {
       const method = String(url).split("/").pop();
@@ -700,19 +704,34 @@ test("a control chat is only with Maria and names the missing method", async () 
         return { ok: true, async json() { return { result: 15 }; } };
       }
       if (method === "im.message.add.json") sent.push(body);
+      if (method === "crm.timeline.comment.add.json") comments.push(body);
       return { ok: true, async json() { return { result: 100 }; } };
     },
     "https://example.invalid/rest/1/placeholder/",
     [
       { id: "7", title: "Другая сделка", offer: false, report: [{ title: "Новости", status: "Не сделано", missing: "На Картах нет новостей.", due: "29.10.2026" }], review: [] },
-      { id: "31", title: "Автосделка Раковой Двор Оформление+3Д", offer: true, created: "2026-10-09T10:00:00+03:00", report: [{ title: "SEO фото", status: "Не сделано", missing: "Подписи фото на Картах шаблонные, это не SEO." }], review: [] },
+      {
+        id: "31",
+        title: "Автосделка Раковой Двор Оформление+3Д",
+        offer: true,
+        created: "2026-10-09T10:00:00+03:00",
+        report: [
+          { title: "SEO фото", status: "Сделано", missing: "Нет", proof: "Ключевые слова записаны в файлы фото в Lightroom, не в видимую подпись на Картах." },
+          { title: "Витрина", status: "Не сделано", missing: "Цена стоит 1 ₽, описания нет.", due: "07.11.2026" },
+        ],
+        review: [],
+      },
     ],
     new Date("2026-11-23T12:00:00+03:00"),
   );
   assert.equal(posted.missing, "");
   assert.equal(posted.posted, 2);
   assert.equal(sent[0].DIALOG_ID, "chat15");
-  assert.equal(sent[0].MESSAGE.startsWith("Автосделка Раковой Двор Оформление+3Д. Шаг: SEO фото."), true);
-  assert.equal(sent[0].MESSAGE.includes("нет новостей"), false);
+  assert.equal(sent[0].MESSAGE.startsWith("Автосделка Раковой Двор Оформление+3Д. Шаг: Витрина."), true);
+  assert.equal(sent[0].MESSAGE.includes("не SEO"), false);
   assert.equal(sent[1].MESSAGE.startsWith("Другая сделка. Шаг: Новости."), true);
+  assert.equal(comments[0].fields.ENTITY_TYPE, "deal");
+  assert.equal(comments[0].fields.ENTITY_ID, 31);
+  assert.equal(comments[0].fields.COMMENT, sent[0].MESSAGE);
+  assert.equal(comments.some((item) => String(item.fields.COMMENT).includes("не SEO")), false);
 });
