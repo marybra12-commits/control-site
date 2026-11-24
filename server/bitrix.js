@@ -1423,19 +1423,36 @@ function newsInWindow(items, start, from, to) {
   });
 }
 
+function publishedOn(item) {
+  return item?.doneOn || formatDay(item?.day);
+}
+
+function doneNews(title, item) {
+  const doneOn = publishedOn(item);
+  const proof = [item.title ? `«${item.title}»` : "", doneOn].filter(Boolean).join(", ");
+  return {
+    title,
+    status: DONE,
+    ...(doneOn ? { doneOn } : {}),
+    ...(proof ? { proof } : {}),
+    ...(title === "Первая новость" && item.title ? { firstNews: item.title } : {}),
+  };
+}
+
+function laterNews(items, start, to) {
+  if (!start) return [];
+  return items.filter((item) => {
+    if (!item?.day || !publishedOn(item)) return false;
+    const offset = dayGap(start, item.day);
+    return offset !== null && offset > to;
+  });
+}
+
 function publicationStep(title, from, to, items, newsRow, start) {
   const placed = newsInWindow(items, start, from, to);
-  if (placed.length) {
-    const item = placed[0];
-    const proof = [item.title ? `«${item.title}»` : "", item.doneOn || ""].filter(Boolean).join(", ");
-    return {
-      title,
-      status: DONE,
-      ...(item.doneOn ? { doneOn: item.doneOn } : {}),
-      ...(proof ? { proof } : {}),
-      ...(title === "Первая новость" && item.title ? { firstNews: item.title } : {}),
-    };
-  }
+  if (placed.length) return doneNews(title, placed[0]);
+  const later = laterNews(items, start, to);
+  if (later.length) return doneNews(title, later[0]);
   if (!start) return { title, status: newsRow?.status === NOT_DONE ? NOT_DONE : NO_DATA, ...(newsRow?.status === NOT_DONE && newsRow.missing ? { missing: newsRow.missing } : {}) };
   const dated = items.filter((item) => item?.day);
   if (newsRow?.status === NOT_DONE && !dated.length) return planStep(title, newsRow);
@@ -1457,11 +1474,12 @@ export function latePublications({ news, anchor } = {}) {
     if (!later.length) continue;
     const item = later[0];
     const due = formatDay(addDays(start, slot.to));
-    const shown = item.title ? `«${item.title}»` : "Публикация";
+    const published = publishedOn(item);
+    if (!due || !published) continue;
     findings.push({
       place: slot.title,
-      wrong: item.doneOn ? `${shown} опубликована ${item.doneOn}.` : `${shown} опубликована позже этой недели.`,
-      change: `Срок этой недели был ${due}. Публикация позже плана.`,
+      wrong: item.title ? `«${item.title}»` : "",
+      change: `Опубликована вне срока недели. Срок ${due}, дата публикации ${published}.`,
       late: true,
     });
   }

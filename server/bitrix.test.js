@@ -541,16 +541,33 @@ test("the month plan names the step due in each of the four weeks", () => {
   assert.equal(plan.weeks[0].steps.some((step) => step.title === "Шапка профиля"), true);
   assert.equal(plan.weeks[1].steps.some((step) => step.title === "Товары в витрине" && step.status === "Сделано"), true);
   const first = plan.weeks[1].steps.find((step) => step.title === "Первая новость");
-  assert.equal(first.status, "Не сделано");
-  assert.equal(first.doneOn, undefined);
+  assert.equal(first.status, "Сделано");
+  assert.equal(first.doneOn, "5 ноября 2026");
+  assert.equal(first.missing, undefined);
+  const second = plan.weeks[2].steps.find((step) => step.title === "Вторая новость");
+  assert.equal(second.status, "Сделано");
+  assert.equal(second.doneOn, "5 ноября 2026");
   assert.equal(plan.weeks[3].steps.find((step) => step.title === "Публикация").doneOn, "5 ноября 2026");
   assert.equal(plan.weeks[3].steps.find((step) => step.title === "Правки после проверки").status, "Нет данных");
   const late = latePublications({
     news: [{ title: "Что выбрать к пенному?", doneOn: "5 ноября 2026", day: "2026-11-05" }],
     anchor: "2026-10-09T12:00:00+03:00",
   });
-  assert.equal(late.some((item) => item.place === "Первая новость" && item.late && item.wrong.includes("5 ноября 2026") && item.change.includes("22.10.2026")), true);
+  assert.equal(late.some((item) => item.place === "Первая новость" && item.late && item.change.includes("22.10.2026") && item.change.includes("5 ноября 2026")), true);
+  assert.equal(late.some((item) => item.place === "Вторая новость" && item.change.includes("29.10.2026") && item.change.includes("5 ноября 2026")), true);
   assert.equal(late.some((item) => item.place === "Публикация"), false);
+  const onTime = monthPlan({
+    rows,
+    anchor: "2026-10-09T12:00:00+03:00",
+    anchorKind: "received",
+    news: [{ title: "Осеннее меню", doneOn: "16 октября 2026", day: "2026-10-16" }],
+  });
+  assert.equal(onTime.weeks[1].steps.find((step) => step.title === "Первая новость").status, "Сделано");
+  assert.equal(onTime.weeks[2].steps.find((step) => step.title === "Вторая новость").status, "Не сделано");
+  assert.equal(latePublications({
+    news: [{ title: "Осеннее меню", doneOn: "16 октября 2026", day: "2026-10-16" }],
+    anchor: "2026-10-09T12:00:00+03:00",
+  }).length, 0);
   const copied = controlBrief({
     maps: rows && {
       opened: true,
