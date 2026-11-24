@@ -1,23 +1,8 @@
 import { GET as readDeals } from "../../../server/deals-handler.js";
-import { sendControlOnce } from "../../../server/send-once.js";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const revalidate = 0;
-
-function bootWebhook() {
-  try {
-    const value = process.env.BITRIX_WEBHOOK_URL;
-    return typeof value === "string" ? value : "";
-  } catch {
-    return "";
-  }
-}
-
-const bootSecret = bootWebhook();
-sendControlOnce(bootSecret ? { BITRIX_WEBHOOK_URL: bootSecret } : null).then((result) => {
-  if (result?.error) console.error(result.error);
-}).catch(() => {});
 
 export function GET(request, context) {
   let configured = "";

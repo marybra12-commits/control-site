@@ -932,11 +932,12 @@ test("the first live stall opens the chat once and a restart does not send it ag
   resetSendFlight();
   const second = await sendControlOnce(env, fetchImpl, now);
   assert.equal(first.created, true);
-  assert.equal(first.posted > 0, true);
+  assert.equal(first.posted, 1);
   assert.equal(first.error, "");
-  assert.equal(writes.some((item) => item.method === "im.chat.add.json" && item.body.TITLE === "Система контроля" && item.body.ENTITY_TYPE == null && item.body.USERS[0] === 3), true);
+  assert.equal(writes.some((item) => item.method === "im.chat.add.json" && item.body.TITLE === "Система контроля" && item.body.ENTITY_TYPE == null && item.body.USERS.length === 1 && item.body.USERS[0] === 3), true);
   assert.equal(writes.filter((item) => item.method === "im.message.add.json").length, 1);
-  assert.equal(writes.filter((item) => item.method === "crm.timeline.comment.add.json").length, 1);
+  assert.equal(writes.find((item) => item.method === "im.message.add.json").body.MESSAGE, "Привет");
+  assert.equal(writes.filter((item) => item.method === "crm.timeline.comment.add.json").length, 0);
   assert.equal(writes.some((item) => JSON.stringify(item.body).includes("SEO фото")), false);
   assert.equal(second.posted, 0);
   assert.equal(writes.length, after);

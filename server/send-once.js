@@ -36,7 +36,12 @@ export function resetSendFlight() {
 }
 
 export function sendControlOnce(env = null, fetchImpl = fetch, now = new Date()) {
-  if (!liveBase(env)) return Promise.resolve({ created: false, posted: 0, error: "" });
-  if (!flight) flight = run(env, fetchImpl, now);
+  if (!liveBase(env)) return Promise.resolve({ created: false, posted: 0, error: "", delivered: false });
+  if (!flight) {
+    flight = run(env, fetchImpl, now).then((result) => {
+      if (!result?.attempted) flight = null;
+      return result;
+    });
+  }
   return flight;
 }

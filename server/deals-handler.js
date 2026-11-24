@@ -1,4 +1,5 @@
 import { loadOformlenieDeals, serviceEnv } from "./bitrix.js";
+import { sendControlOnce } from "./send-once.js";
 
 const WEBHOOK_ENV = "BITRIX_WEBHOOK_URL";
 
@@ -36,8 +37,15 @@ export function envForRequest(context, configured) {
 }
 
 export async function GET(_request, context, configured) {
+  const env = envForRequest(context, configured);
   try {
-    const body = await loadOformlenieDeals(envForRequest(context, configured));
+    const sent = await sendControlOnce(env);
+    if (sent?.error) console.error(sent.error);
+  } catch {
+    // The deal list still loads when the one-shot fails.
+  }
+  try {
+    const body = await loadOformlenieDeals(env);
     return Response.json(body, {
       headers: { "cache-control": "no-store" },
     });

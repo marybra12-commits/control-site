@@ -1036,6 +1036,7 @@ let hourCacheOn = false;
 let notBefore = 0;
 let callsLeft = Infinity;
 let outboundCapped = false;
+let paceBypass = 0;
 
 function armOutboundLimit() {
   notBefore = 0;
@@ -1044,6 +1045,7 @@ function armOutboundLimit() {
 }
 
 async function paceOutbound() {
+  if (paceBypass > 0) return true;
   if (!hourCacheOn) return true;
   if (callsLeft <= 0) {
     outboundCapped = true;
@@ -1393,19 +1395,36 @@ function sentFile() {
   return typeof custom === "string" && custom.trim() ? custom.trim() : join(tmpdir(), "control-site-sent.json");
 }
 
-export function rememberSentSteps() {
+function readSendRecord() {
   try {
-    const data = JSON.parse(readFileSync(sentFile(), "utf8"));
-    for (const key of data?.keys || []) postedSteps.add(key);
+    return JSON.parse(readFileSync(sentFile(), "utf8"));
   } catch {
-    // A missing mark means this stall has not been sent.
+    return null;
   }
+}
+
+export function openingDelivered() {
+  const data = readSendRecord();
+  return Boolean(data?.delivered && data?.chatId);
+}
+
+export function rememberSentSteps() {
+  const data = readSendRecord();
+  if (!data?.delivered) return;
+  for (const key of data.keys || []) postedSteps.add(key);
 }
 
 export function storeSentSteps(report = {}) {
   const error = String(report.error || "").replace(/https?:\/\/\S+/gi, "").replace(/\s+/g, " ").trim();
+  const chatId = String(report.chatId || "").replace(/https?:\/\/\S+/gi, "").trim();
   try {
-    writeFileSync(sentFile(), JSON.stringify({ keys: [...postedSteps], error }), { mode: 0o600 });
+    writeFileSync(sentFile(), JSON.stringify({
+      keys: [...postedSteps],
+      error,
+      delivered: Boolean(report.delivered && chatId),
+      chatId,
+      hello: report.hello === true,
+    }), { mode: 0o600 });
   } catch {
     // The Bitrix chat and the deal comment remain the record if the disk is read-only.
   }
@@ -1483,6 +1502,16 @@ function recentChatId(row) {
   return id.replace(/^chat/i, "");
 }
 
+function linkedEntity(row) {
+  return field(row?.entity_type ?? row?.ENTITY_TYPE ?? row?.entity_id ?? row?.ENTITY_ID ?? row?.chat?.entity_type ?? row?.chat?.ENTITY_TYPE);
+}
+
+async function visibleChat(fetchImpl, base, id) {
+  const info = await postResult(fetchImpl, endpointFor(base, "im.chat.get.json"), { CHAT_ID: id });
+  if (!info.ok || linkedEntity(info.result)) return false;
+  return true;
+}
+
 async function ensureControlChat(fetchImpl, base, mariaId) {
   if (controlChatId) return { id: controlChatId, missing: "", error: "" };
   const recent = await postResult(fetchImpl, endpointFor(base, "im.recent.get.json"), {});
@@ -1491,23 +1520,34 @@ async function ensureControlChat(fetchImpl, base, mariaId) {
     : (Array.isArray(recent.result?.items) ? recent.result.items : userRows(recent.result));
   for (const row of recentRows) {
     const title = field(row?.title ?? row?.TITLE ?? row?.chat?.title ?? row?.chat?.TITLE);
-    if (title !== "Система контроля") continue;
+    if (title !== "Система контроля" || linkedEntity(row)) continue;
     const id = recentChatId(row);
-    if (!id) continue;
+    if (!id || !(await visibleChat(fetchImpl, base, id))) continue;
     controlChatId = id;
     return { id, missing: "", error: "" };
   }
+  const users = [Number(mariaId) || mariaId];
   const created = await postResult(fetchImpl, endpointFor(base, "im.chat.add.json"), {
     TYPE: "CHAT",
     TITLE: "Система контроля",
-    USERS: [Number(mariaId) || mariaId],
+    USERS: users,
   });
   const id = controlChatIdFrom(created.result);
-  if (created.ok && id) {
-    controlChatId = id;
-    return { id, missing: "", error: "" };
+  if (!(created.ok && id)) {
+    return { id: "", missing: "im.chat.add", error: created.errorDescription || created.error || "Bitrix не ответил" };
   }
-  return { id: "", missing: "im.chat.add", error: created.errorDescription || created.error || "Bitrix не ответил" };
+  const added = await postResult(fetchImpl, endpointFor(base, "im.chat.user.add.json"), {
+    CHAT_ID: id,
+    USERS: users,
+  });
+  if (!added.ok) {
+    const text = added.errorDescription || added.error || "";
+    if (/ACCESS_DENIED|USER_NOT_FOUND|не найден/i.test(text)) {
+      return { id, missing: "im.chat.user.add", error: text };
+    }
+  }
+  controlChatId = id;
+  return { id, missing: "", error: "" };
 }
 
 function commentText(row) {
@@ -1572,12 +1612,13 @@ export async function deliverControlChat(fetchImpl, base, jobs, now = new Date()
   }
   const archives = new Map();
   let posted = 0;
+  let commented = false;
   for (const item of pending) {
     const needle = stepNeedle(item.step);
     const chatHas = postedMessages.has(item.key) || [...seen].some((text) => text.includes(needle));
     if (!archives.has(item.id)) archives.set(item.id, item.id ? await commentArchive(fetchImpl, base, item.id) : "");
     const archive = archives.get(item.id);
-    const commentRecorded = archive == null ? chatHas : archive.includes(needle);
+    const commentRecorded = typeof archive === "string" && archive.includes(needle);
     const commentHas = postedComments.has(item.key) || commentRecorded;
     if (!chatHas && chat.id) {
       const sent = await postResult(fetchImpl, endpointFor(base, "im.message.add.json"), {
@@ -1594,59 +1635,69 @@ export async function deliverControlChat(fetchImpl, base, jobs, now = new Date()
     if (!commentHas && item.id) {
       const comment = await postDealComment(fetchImpl, base, item.id, item.line);
       if (comment.missing) note(comment.missing, comment.error);
-      else postedComments.add(item.key);
+      else {
+        postedComments.add(item.key);
+        commented = true;
+      }
+    } else if (commentHas) {
+      commented = true;
     }
     const messageSettled = Boolean(chat.id) && (chatHas || postedMessages.has(item.key));
     const commentSettled = Boolean(item.id) && (commentHas || postedComments.has(item.key));
     if (messageSettled && commentSettled) postedSteps.add(item.key);
   }
-  return { posted, missing: failures.join(", "), error: errors.join("; "), chatId: chat.id || "" };
+  return { posted, missing: failures.join(", "), error: errors.join("; "), chatId: chat.id || "", commented };
 }
 
-export async function openRakovChannel(fetchImpl, base, now = new Date()) {
-  rememberSentSteps();
-  const listed = await postResult(fetchImpl, endpointFor(base, "crm.deal.list.json"), {
-    filter: { "%TITLE": "Раков", CLOSED: "N" },
-    select: ["ID", "TITLE", "DATE_CREATE"],
-  });
-  const rows = Array.isArray(listed.result) ? listed.result : [];
-  const row = rows.find((item) => isRakovDeal(item?.TITLE) && /оформлен/i.test(field(item?.TITLE)))
-    || rows.find((item) => isRakovDeal(item?.TITLE));
-  if (!row) {
-    const error = listed.errorDescription || listed.error || (listed.ok ? "" : "Bitrix не ответил");
-    storeSentSteps({ error });
-    return { created: false, posted: 0, error, chatId: "" };
+function cleanBitrix(text) {
+  return String(text || "").replace(/https?:\/\/\S+/gi, "").replace(/\s+/g, " ").trim();
+}
+
+function helloRecorded() {
+  return readSendRecord()?.hello === true;
+}
+
+export async function openRakovChannel(fetchImpl, base) {
+  if (helloRecorded()) {
+    const saved = readSendRecord();
+    return {
+      created: false,
+      posted: 0,
+      error: cleanBitrix(saved?.error),
+      chatId: field(saved?.chatId),
+      delivered: false,
+      attempted: true,
+    };
   }
-  const created = field(row.DATE_CREATE) || "2026-10-09T10:00:00+03:00";
-  const page = await fetchMapsHtml(fetchImpl, RAKOV_MAPS);
-  const profile = page?.html ? parseMapsProfile(page.html) : null;
-  const maps = profile?.opened ? profile : null;
-  const title = field(row.TITLE);
-  const report = controlBrief({ maps, created, now, heard: {}, deal: { title, fileSeo: true } });
-  const review = maps ? reviewFindings(maps, { created, now }) : [];
-  const line = controlMessages({ id: field(row.ID), title, created, report, review }, now)[0] || "";
-  if (!line) {
-    storeSentSteps({ error: "" });
-    return { created: false, posted: 0, error: "", chatId: "" };
+  paceBypass += 1;
+  try {
+    const maria = await findMaria(fetchImpl, base);
+    if (!maria.id) {
+      const error = cleanBitrix(maria.error) || "Bitrix не ответил";
+      storeSentSteps({ hello: true, error, delivered: false, chatId: "" });
+      return { created: false, posted: 0, error, chatId: "", delivered: false, attempted: true };
+    }
+    const chat = await ensureControlChat(fetchImpl, base, maria.id);
+    if (!chat.id) {
+      const error = cleanBitrix(chat.error) || "Bitrix не ответил";
+      storeSentSteps({ hello: true, error, delivered: false, chatId: "" });
+      return { created: false, posted: 0, error, chatId: "", delivered: false, attempted: true };
+    }
+    const sent = await postResult(fetchImpl, endpointFor(base, "im.message.add.json"), {
+      DIALOG_ID: `chat${chat.id}`,
+      MESSAGE: "Привет",
+    });
+    const error = sent.ok ? cleanBitrix(chat.error) : (cleanBitrix(sent.errorDescription || sent.error) || "Bitrix не ответил");
+    const delivered = Boolean(sent.ok && chat.id && !error);
+    storeSentSteps({ hello: true, error, delivered, chatId: chat.id });
+    return { created: delivered, posted: sent.ok ? 1 : 0, error, chatId: chat.id, delivered, attempted: true };
+  } catch {
+    const error = "Bitrix не ответил";
+    storeSentSteps({ hello: true, error, delivered: false, chatId: "" });
+    return { created: false, posted: 0, error, chatId: "", delivered: false, attempted: true };
+  } finally {
+    paceBypass -= 1;
   }
-  const step = line.match(/Шаг:\s*(.+?)\.\s*Срок:/);
-  const fix = line.match(/Исправьте:\s*(.*)$/);
-  const due = line.match(/Срок:\s*(.+?)\.\s*Исправьте:/);
-  const sent = await deliverControlChat(fetchImpl, base, [{
-    id: field(row.ID),
-    title,
-    offer: true,
-    created,
-    report: [{
-      title: step ? step[1] : "Шаг",
-      status: NOT_DONE,
-      missing: fix ? fix[1] : line,
-      due: due ? due[1] : "",
-    }],
-    review: [],
-  }], now);
-  storeSentSteps({ error: sent.error || "" });
-  return { created: Boolean(sent.chatId), posted: sent.posted || 0, error: sent.error || "", chatId: sent.chatId || "" };
 }
 
 export function managerRows(items, created, now) {
