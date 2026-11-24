@@ -124,14 +124,14 @@ function Trends() {
 }
 
 function ShotList({ shots }) {
-  if (!Array.isArray(shots) || shots.length === 0) return noData;
+  if (!Array.isArray(shots) || shots.length === 0) return <span style={{ color: "var(--muted)" }}>—</span>;
   return (
     <ul className="shot-list">
-      {shots.map((shot) => (
-        <li key={`${shot.account}:${shot.received}:${shot.date}`}>
-          <p><span>Дата</span> {shot.date || noData}</p>
-          <p><span>Аккаунт</span> {shot.account || noData}</p>
-          <p><span>Получено</span> {shot.received || noData}</p>
+      {shots.map((shot, i) => (
+        <li key={`${shot.account || ""}:${shot.received || ""}:${i}`}>
+          <p><span>Дата</span> {shot.date && shot.date !== noData ? shot.date : "—"}</p>
+          <p><span>Аккаунт</span> {shot.account || "—"}</p>
+          <p><span>Получено</span> {shot.received && shot.received !== noData ? shot.received : "—"}</p>
           {shot.note ? <p>{shot.note}</p> : null}
         </li>
       ))}
@@ -140,13 +140,15 @@ function ShotList({ shots }) {
 }
 
 function ReviewsTable({ clients, error, pending, truncated }) {
-  const rows = clients.length > 0 ? clients : reviewClients;
+  const rows = clients.length > 0 ? clients : [];
   const note = [
     pending ? "Читаем переписку «Максим Отзывы»…" : "",
     error || "",
-    truncated ? "Показана не вся переписка." : "",
+    truncated ? "Показана не вся переписка — старые сообщения могут отсутствовать." : "",
+    rows.length === 0 && !pending && !error ? "В переписке пока не найдено организаций." : "",
     reviewSource,
   ].filter(Boolean).join(" ");
+
   return (
     <section className="card reviews-card" aria-label="Отзывы">
       <div className="reviews-scroll">
@@ -156,33 +158,54 @@ function ReviewsTable({ clients, error, pending, truncated }) {
               <th>Организация</th>
               <th>Ссылка</th>
               <th>Заказано</th>
-              <th>Скриншоты</th>
+              <th>Скриншоты / факт</th>
               <th>Остаток</th>
               <th>Оплата</th>
               <th>Статус</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((client) => (
-              <tr key={client.id}>
-                <td>{client.organization}</td>
-                <td>{dealLink(client.link || noData)}</td>
-                <td>{client.purchased || noData}</td>
-                <td className="reviews-facts"><ShotList shots={client.shots} /></td>
-                <td>{client.remainder || noData}</td>
-                <td className="reviews-pay">
-                  <p>{client.payment || noData}</p>
-                  {client.paymentNote ? <p className="reviews-sub">{client.paymentNote}</p> : null}
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={7} style={{ textAlign: "center", color: "var(--muted)", padding: "32px 16px" }}>
+                  {pending ? "Загрузка данных из переписки…" : "Клиенты не найдены"}
                 </td>
-                <td>{client.status || noData}</td>
               </tr>
-            ))}
+            ) : (
+              rows.map((client) => (
+                <tr key={client.id}>
+                  <td><strong>{client.organization}</strong></td>
+                  <td>{dealLink(client.link || "—")}</td>
+                  <td className="num">{client.purchased && client.purchased !== noData ? client.purchased : "—"}</td>
+                  <td className="reviews-facts">
+                    <ShotList shots={client.shots} />
+                  </td>
+                  <td className="num">{client.remainder && client.remainder !== noData ? client.remainder : "—"}</td>
+                  <td className="reviews-pay">
+                    <div>{client.payment && client.payment !== noData ? client.payment : "—"}</div>
+                    {client.paymentNote ? <div className="reviews-sub">{client.paymentNote}</div> : null}
+                  </td>
+                  <td>
+                    <span className={`status-badge ${statusClass(client.status)}`}>
+                      {client.status && client.status !== noData ? client.status : "нет данных"}
+                    </span>
+                  </td>
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
       </div>
-      <p className="reviews-note">{note}</p>
+      {note ? <p className="reviews-note">{note}</p> : null}
     </section>
   );
+}
+
+function statusClass(status) {
+  const s = String(status || "").toLowerCase();
+  if (s.includes("запущ")) return "status-done";
+  if (s.includes("работ")) return "status-work";
+  return "status-none";
 }
 
 function Mark({ closed }) {
