@@ -1424,6 +1424,7 @@ export function storeSentSteps(report = {}) {
       delivered: Boolean(report.delivered && chatId),
       chatId,
       hello: report.hello === true,
+      existingHello: report.existingHello === true,
     }), { mode: 0o600 });
   } catch {
     // The Bitrix chat and the deal comment remain the record if the disk is read-only.
@@ -1653,47 +1654,69 @@ function cleanBitrix(text) {
   return String(text || "").replace(/https?:\/\/\S+/gi, "").replace(/\s+/g, " ").trim();
 }
 
-function helloRecorded() {
-  return readSendRecord()?.hello === true;
+function existingHelloRecorded() {
+  return readSendRecord()?.existingHello === true;
+}
+
+function recentDialogs(result) {
+  if (Array.isArray(result)) return result;
+  if (Array.isArray(result?.items)) return result.items;
+  return userRows(result);
+}
+
+function dialogTitle(row) {
+  return field(row?.title ?? row?.TITLE ?? row?.chat?.title ?? row?.chat?.TITLE);
+}
+
+async function findExistingControlChat(fetchImpl, base) {
+  const recent = await postResult(fetchImpl, endpointFor(base, "im.recent.get.json"), {
+    SKIP_OPENLINES: "Y",
+    LIMIT: 50,
+  });
+  if (!recent.ok && !recent.result) {
+    return { id: "", error: cleanBitrix(recent.errorDescription || recent.error) || "Bitrix не ответил" };
+  }
+  for (const row of recentDialogs(recent.result)) {
+    if (dialogTitle(row) !== "Система контроля" || linkedEntity(row)) continue;
+    const id = recentChatId(row);
+    if (!id) continue;
+    return { id, error: "" };
+  }
+  const listed = cleanBitrix(recent.errorDescription || recent.error);
+  return { id: "", error: listed || "В списке диалогов нет чата «Система контроля»." };
 }
 
 export async function openRakovChannel(fetchImpl, base) {
-  if (helloRecorded()) {
+  if (existingHelloRecorded()) {
     const saved = readSendRecord();
     return {
       created: false,
       posted: 0,
       error: cleanBitrix(saved?.error),
       chatId: field(saved?.chatId),
-      delivered: false,
+      delivered: Boolean(saved?.delivered),
       attempted: true,
     };
   }
   paceBypass += 1;
   try {
-    const maria = await findMaria(fetchImpl, base);
-    if (!maria.id) {
-      const error = cleanBitrix(maria.error) || "Bitrix не ответил";
-      storeSentSteps({ hello: true, error, delivered: false, chatId: "" });
-      return { created: false, posted: 0, error, chatId: "", delivered: false, attempted: true };
-    }
-    const chat = await ensureControlChat(fetchImpl, base, maria.id);
+    const chat = await findExistingControlChat(fetchImpl, base);
     if (!chat.id) {
-      const error = cleanBitrix(chat.error) || "Bitrix не ответил";
-      storeSentSteps({ hello: true, error, delivered: false, chatId: "" });
+      const error = chat.error || "В списке диалогов нет чата «Система контроля».";
+      storeSentSteps({ existingHello: true, error, delivered: false, chatId: "" });
       return { created: false, posted: 0, error, chatId: "", delivered: false, attempted: true };
     }
     const sent = await postResult(fetchImpl, endpointFor(base, "im.message.add.json"), {
       DIALOG_ID: `chat${chat.id}`,
       MESSAGE: "Привет",
     });
-    const error = sent.ok ? cleanBitrix(chat.error) : (cleanBitrix(sent.errorDescription || sent.error) || "Bitrix не ответил");
-    const delivered = Boolean(sent.ok && chat.id && !error);
-    storeSentSteps({ hello: true, error, delivered, chatId: chat.id });
-    return { created: delivered, posted: sent.ok ? 1 : 0, error, chatId: chat.id, delivered, attempted: true };
+    const error = sent.ok ? "" : (cleanBitrix(sent.errorDescription || sent.error) || "Bitrix не ответил");
+    const delivered = Boolean(sent.ok && !error);
+    storeSentSteps({ existingHello: true, error, delivered, chatId: chat.id });
+    return { created: false, posted: sent.ok ? 1 : 0, error, chatId: chat.id, delivered, attempted: true };
   } catch {
     const error = "Bitrix не ответил";
-    storeSentSteps({ hello: true, error, delivered: false, chatId: "" });
+    storeSentSteps({ existingHello: true, error, delivered: false, chatId: "" });
     return { created: false, posted: 0, error, chatId: "", delivered: false, attempted: true };
   } finally {
     paceBypass -= 1;

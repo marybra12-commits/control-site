@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { acceptanceStatus, clearSentMemory, controlBrief, controlMessages, deliverControlChat, loadOformlenieDeals, organizationName, parseMapsProfile, pipelineSection, readDialog, resetControlChatState, reviewFindings, webhookConfigured } from "./bitrix.js";
@@ -905,22 +905,18 @@ test("the first live stall opens the chat once and a restart does not send it ag
   process.env.CONTROL_SENT_FILE = join(dir, "sent.json");
   resetControlChatState();
   resetSendFlight();
+  writeFileSync(process.env.CONTROL_SENT_FILE, JSON.stringify({ hello: true, error: "старая попытка", delivered: false, chatId: "" }));
   const writes = [];
   const fetchImpl = async (url, options) => {
     const address = String(url);
     const method = address.split("/").pop();
     const body = options?.body ? JSON.parse(options.body) : {};
-    if (method === "im.chat.add.json" || method === "im.message.add.json" || method === "crm.timeline.comment.add.json") writes.push({ method, body });
+    if (method === "im.chat.add.json" || method === "im.message.add.json" || method === "crm.timeline.comment.add.json" || method === "im.chat.user.add.json") writes.push({ method, body });
     if (address.includes("yandex.ru/maps")) {
       return { ok: true, url: address, async text() { return "<title>Раковый двор</title>"; } };
     }
     const rows = {
-      "crm.dealcategory.list.json": [{ ID: "2", NAME: "Оформление ЯКарты/Аналитика" }],
-      "crm.deal.list.json": [{ ID: "31", TITLE: "Автосделка Раковой Двор Оформление+3Д", CATEGORY_ID: "2", STAGE_ID: "C2:NEW", ASSIGNED_BY_ID: "1", DATE_CREATE: "2026-10-09T10:00:00+03:00" }],
-      "crm.status.list.json": [{ ENTITY_ID: "DEAL_STAGE_2", STATUS_ID: "C2:NEW", NAME: "Новая" }],
-      "user.get.json": [{ ID: "3", NAME: "Мария", LAST_NAME: "Брага" }],
-      "crm.deal.get.json": { ID: "31", TITLE: "Автосделка Раковой Двор Оформление+3Д", CATEGORY_ID: "2", DATE_CREATE: "2026-10-09T10:00:00+03:00" },
-      "im.chat.add.json": 15,
+      "im.recent.get.json": [{ id: "chat15", chat_id: 15, title: "Система контроля", type: "chat" }],
     };
     return { ok: true, async json() { return { result: rows[method] ?? [] }; } };
   };
@@ -931,14 +927,14 @@ test("the first live stall opens the chat once and a restart does not send it ag
   clearSentMemory();
   resetSendFlight();
   const second = await sendControlOnce(env, fetchImpl, now);
-  assert.equal(first.created, true);
+  assert.equal(first.created, false);
   assert.equal(first.posted, 1);
   assert.equal(first.error, "");
-  assert.equal(writes.some((item) => item.method === "im.chat.add.json" && item.body.TITLE === "Система контроля" && item.body.ENTITY_TYPE == null && item.body.USERS.length === 1 && item.body.USERS[0] === 3), true);
+  assert.equal(writes.some((item) => item.method === "im.chat.add.json" || item.method === "im.chat.user.add.json"), false);
   assert.equal(writes.filter((item) => item.method === "im.message.add.json").length, 1);
   assert.equal(writes.find((item) => item.method === "im.message.add.json").body.MESSAGE, "Привет");
+  assert.equal(writes.find((item) => item.method === "im.message.add.json").body.DIALOG_ID, "chat15");
   assert.equal(writes.filter((item) => item.method === "crm.timeline.comment.add.json").length, 0);
-  assert.equal(writes.some((item) => JSON.stringify(item.body).includes("SEO фото")), false);
   assert.equal(second.posted, 0);
   assert.equal(writes.length, after);
   delete process.env.CONTROL_SENT_FILE;
