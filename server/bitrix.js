@@ -1402,9 +1402,10 @@ export function rememberSentSteps() {
   }
 }
 
-export function storeSentSteps() {
+export function storeSentSteps(report = {}) {
+  const error = String(report.error || "").replace(/https?:\/\/\S+/gi, "").replace(/\s+/g, " ").trim();
   try {
-    writeFileSync(sentFile(), JSON.stringify({ keys: [...postedSteps] }), { mode: 0o600 });
+    writeFileSync(sentFile(), JSON.stringify({ keys: [...postedSteps], error }), { mode: 0o600 });
   } catch {
     // The Bitrix chat and the deal comment remain the record if the disk is read-only.
   }
@@ -1453,12 +1454,16 @@ function isMaria(user) {
 
 function userRows(result) {
   if (Array.isArray(result)) return result;
-  if (result && typeof result === "object") return Object.values(result);
+  if (result && typeof result === "object") {
+    if (result.ID || result.NAME || result.LAST_NAME) return [result];
+    return Object.values(result);
+  }
   return [];
 }
 
 async function findMaria(fetchImpl, base) {
   const attempts = [
+    ["user.current.json", {}],
     ["user.get.json", { FILTER: { NAME: "Мария", LAST_NAME: "Брага", ACTIVE: "Y" } }],
     ["user.search.json", { FIND: "Мария Брага" }],
     ["user.get.json", {}],
@@ -1502,7 +1507,7 @@ async function ensureControlChat(fetchImpl, base, mariaId) {
     controlChatId = id;
     return { id, missing: "", error: "" };
   }
-  return { id: "", missing: "im.chat.add", error: created.errorDescription || created.error || "" };
+  return { id: "", missing: "im.chat.add", error: created.errorDescription || created.error || "Bitrix не ответил" };
 }
 
 function commentText(row) {
@@ -1510,15 +1515,17 @@ function commentText(row) {
 }
 
 async function postDealComment(fetchImpl, base, dealId, line) {
-  const sent = await postResult(fetchImpl, endpointFor(base, "crm.timeline.comment.add.json"), {
-    fields: {
-      ENTITY_ID: Number(dealId) || dealId,
-      ENTITY_TYPE: "deal",
-      COMMENT: line,
-    },
-  });
+  const comment = {
+    ENTITY_ID: Number(dealId) || dealId,
+    ENTITY_TYPE: "deal",
+    COMMENT: line,
+  };
+  let sent = await postResult(fetchImpl, endpointFor(base, "crm.timeline.comment.add.json"), { fields: comment });
+  if (!sent.ok) {
+    sent = await postResult(fetchImpl, endpointFor(base, "crm.timeline.comment.add.json"), { FIELDS: comment });
+  }
   if (sent.ok) return { missing: "", error: "" };
-  return { missing: "crm.timeline.comment.add", error: sent.errorDescription || sent.error || "" };
+  return { missing: "crm.timeline.comment.add", error: sent.errorDescription || sent.error || "Bitrix не ответил" };
 }
 
 async function commentArchive(fetchImpl, base, dealId) {
@@ -1589,11 +1596,57 @@ export async function deliverControlChat(fetchImpl, base, jobs, now = new Date()
       if (comment.missing) note(comment.missing, comment.error);
       else postedComments.add(item.key);
     }
-    const messageSettled = chatHas || postedMessages.has(item.key) || !chat.id;
-    const commentSettled = commentHas || postedComments.has(item.key) || !item.id;
+    const messageSettled = Boolean(chat.id) && (chatHas || postedMessages.has(item.key));
+    const commentSettled = Boolean(item.id) && (commentHas || postedComments.has(item.key));
     if (messageSettled && commentSettled) postedSteps.add(item.key);
   }
   return { posted, missing: failures.join(", "), error: errors.join("; "), chatId: chat.id || "" };
+}
+
+export async function openRakovChannel(fetchImpl, base, now = new Date()) {
+  rememberSentSteps();
+  const listed = await postResult(fetchImpl, endpointFor(base, "crm.deal.list.json"), {
+    filter: { "%TITLE": "Раков", CLOSED: "N" },
+    select: ["ID", "TITLE", "DATE_CREATE"],
+  });
+  const rows = Array.isArray(listed.result) ? listed.result : [];
+  const row = rows.find((item) => isRakovDeal(item?.TITLE) && /оформлен/i.test(field(item?.TITLE)))
+    || rows.find((item) => isRakovDeal(item?.TITLE));
+  if (!row) {
+    const error = listed.errorDescription || listed.error || (listed.ok ? "" : "Bitrix не ответил");
+    storeSentSteps({ error });
+    return { created: false, posted: 0, error, chatId: "" };
+  }
+  const created = field(row.DATE_CREATE) || "2026-10-09T10:00:00+03:00";
+  const page = await fetchMapsHtml(fetchImpl, RAKOV_MAPS);
+  const profile = page?.html ? parseMapsProfile(page.html) : null;
+  const maps = profile?.opened ? profile : null;
+  const title = field(row.TITLE);
+  const report = controlBrief({ maps, created, now, heard: {}, deal: { title, fileSeo: true } });
+  const review = maps ? reviewFindings(maps, { created, now }) : [];
+  const line = controlMessages({ id: field(row.ID), title, created, report, review }, now)[0] || "";
+  if (!line) {
+    storeSentSteps({ error: "" });
+    return { created: false, posted: 0, error: "", chatId: "" };
+  }
+  const step = line.match(/Шаг:\s*(.+?)\.\s*Срок:/);
+  const fix = line.match(/Исправьте:\s*(.*)$/);
+  const due = line.match(/Срок:\s*(.+?)\.\s*Исправьте:/);
+  const sent = await deliverControlChat(fetchImpl, base, [{
+    id: field(row.ID),
+    title,
+    offer: true,
+    created,
+    report: [{
+      title: step ? step[1] : "Шаг",
+      status: NOT_DONE,
+      missing: fix ? fix[1] : line,
+      due: due ? due[1] : "",
+    }],
+    review: [],
+  }], now);
+  storeSentSteps({ error: sent.error || "" });
+  return { created: Boolean(sent.chatId), posted: sent.posted || 0, error: sent.error || "", chatId: sent.chatId || "" };
 }
 
 export function managerRows(items, created, now) {
